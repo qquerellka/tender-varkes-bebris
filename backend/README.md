@@ -14,6 +14,12 @@ CSV по умолчанию:
 - `../ML/data/orig/Контракты_20260403/Контракты_20260403.csv`
 
 ## Рекомендуемый локальный режим
+- `ARCHITECTURE.md` - структура backend
+- `ENTITY_REFERENCE.md` - сущности backend, их поля и значения
+- `ML_HANDOFF.md` - контракт backend <-> ML
+- `TELEMETRY_SPEC.md` - event-модель и search signals
+- `TELEMETRY_EVENT_DICTIONARY.md` - словарь raw events и payload
+- `TELEMETRY_QA_CHECKLIST.md` - ручная проверка telemetry через debug API
 
 Для локальной отладки backend сейчас удобно запускать в retrieval-first конфигурации:
 

@@ -1,17 +1,15 @@
 import {
   ArrowLeftOutlined,
   AppstoreOutlined,
-  RiseOutlined,
   ShoppingCartOutlined,
 } from '@ant-design/icons'
-import { Button, Empty, Select, Skeleton, Tag, Typography } from 'antd'
+import { Empty, Select, Skeleton } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
 import {
   activityFilterOptions,
-  getActivityColor,
   getActivityFilterKey,
   type ActivityFilter,
 } from '@entities/search/lib/activity'
@@ -25,6 +23,49 @@ import {
   type SupplierInsightsResponse,
 } from '@shared/api/search'
 import { clearStoredSession, readStoredSession } from '@shared/lib/portal-session'
+import {
+  ActivityCard,
+  ActivityMeta,
+  ActivityText,
+  ActivityTimeline,
+  ActivityTitle,
+  ActivityTop,
+  DetailCard,
+  DetailList,
+  DetailMeta,
+  DetailTitle,
+  EmptyStateBlock,
+  EmptyStateText,
+  HeroActionRow,
+  HeroEyebrow,
+  HeroIntroBlock,
+  HeroText,
+  HeroTitle,
+  MetricCard,
+  MetricGrid,
+  MetricLabel,
+  MetricValue,
+  InlineActionRow,
+  OnboardingCard,
+  OnboardingCardAction,
+  OnboardingCardText,
+  OnboardingCardTitle,
+  OnboardingGrid,
+  OnboardingHeader,
+  OnboardingSurface,
+  OnboardingText,
+  OnboardingTitle,
+  SectionHeaderBar,
+  SectionHeading,
+  SectionSurface,
+  StatusPill,
+  SurfaceButton,
+  SnapshotCard,
+  SnapshotGrid,
+  SnapshotHint,
+  SnapshotLabel,
+  SnapshotValue,
+} from '@shared/ui/dashboard-surfaces'
 import PortalShell from '@widgets/portal-shell/PortalShell'
 
 type SupplierStarterScenario = {
@@ -155,6 +196,26 @@ function formatDateTime(value: string | null) {
   }).format(new Date(value))
 }
 
+function getActivityPillTone(eventType: string): 'accent' | 'success' | 'warning' | 'danger' | 'purple' | 'info' {
+  const normalized = eventType.toLowerCase()
+  if (normalized.includes('purchase')) {
+    return 'success'
+  }
+  if (normalized.includes('cart')) {
+    return 'warning'
+  }
+  if (normalized.includes('favorite') || normalized.includes('comparison')) {
+    return 'purple'
+  }
+  if (normalized.includes('irrelevant')) {
+    return 'danger'
+  }
+  if (normalized.includes('result') || normalized.includes('search')) {
+    return 'accent'
+  }
+  return 'info'
+}
+
 const Main = styled.main`
   width: min(1440px, calc(100% - 32px));
   margin: 0 auto;
@@ -170,6 +231,16 @@ const Hero = styled.section`
   box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
 `
 
+const HeroBody = styled.div`
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 18px;
+
+  @media (max-width: 1080px) {
+    grid-template-columns: 1fr;
+  }
+`
+
 const HeroTop = styled.div`
   display: flex;
   align-items: center;
@@ -178,117 +249,10 @@ const HeroTop = styled.div`
   flex-wrap: wrap;
 `
 
-const SummaryGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-
-  @media (max-width: 980px) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  @media (max-width: 620px) {
-    grid-template-columns: 1fr;
-  }
-`
-
-const SummaryCard = styled.div`
-  display: grid;
-  gap: 4px;
-  padding: 14px 16px;
-  border: 1px solid #e1e8f0;
-  background: #fbfcfe;
-`
-
-const SummaryValue = styled.span`
-  color: #2a3f5e;
-  font-size: 22px;
-  font-weight: 800;
-`
-
-const SummaryLabel = styled.span`
-  color: #7a889b;
-  font-size: 12px;
-`
-
 const Actions = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-`
-
-const OnboardingStrip = styled.section`
-  display: grid;
-  gap: 16px;
-  margin-top: 18px;
-  padding: 20px;
-  border: 1px solid #d9e0e8;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(249, 243, 236, 0.98) 100%);
-  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
-`
-
-const OnboardingHeader = styled.div`
-  display: grid;
-  gap: 6px;
-`
-
-const OnboardingTitle = styled.span`
-  color: #2a3c56;
-  font-size: 20px;
-  font-weight: 800;
-`
-
-const OnboardingText = styled.span`
-  color: #607085;
-  font-size: 14px;
-  line-height: 1.5;
-`
-
-const OnboardingGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-
-  @media (max-width: 1100px) {
-    grid-template-columns: 1fr;
-  }
-`
-
-const OnboardingCard = styled.button`
-  display: grid;
-  gap: 8px;
-  padding: 16px;
-  border: 1px solid #e5ddd4;
-  color: #273a53;
-  font: inherit;
-  text-align: left;
-  background: #fff;
-  cursor: pointer;
-
-  &:hover {
-    border-color: #c26d2d;
-    background: #fffaf4;
-  }
-`
-
-const OnboardingCardTitle = styled.span`
-  color: #7c4a1a;
-  font-size: 15px;
-  font-weight: 800;
-`
-
-const OnboardingCardText = styled.span`
-  color: #66778c;
-  font-size: 13px;
-  line-height: 1.45;
-`
-
-const OnboardingCardAction = styled.span`
-  color: #c26d2d;
-  font-size: 13px;
-  font-weight: 800;
-  text-transform: uppercase;
 `
 
 const Grid = styled.section`
@@ -302,106 +266,10 @@ const Grid = styled.section`
   }
 `
 
-const SectionCard = styled.section`
-  display: grid;
-  gap: 14px;
-  padding: 18px;
-  border: 1px solid #dee6ee;
-  background: #fff;
-  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
-`
-
-const SectionTitle = styled(Typography.Title)`
-  && {
-    margin: 0;
-    color: #30415a;
-    font-size: 18px;
-    font-weight: 700;
-  }
-`
-
-const InsightList = styled.div`
-  display: grid;
-  gap: 10px;
-`
-
-const InsightCard = styled.div`
-  display: grid;
-  gap: 5px;
-  padding: 14px;
-  border: 1px solid #e1e8f0;
-  background: #fbfcfe;
-`
-
-const InsightTitle = styled.span`
-  color: #273a53;
-  font-size: 14px;
-  font-weight: 700;
-`
-
-const InsightMeta = styled.span`
-  color: #6f7d8e;
-  font-size: 12px;
-  line-height: 1.45;
-`
-
 const HeroTags = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-`
-
-const EmptyState = styled.div`
-  display: grid;
-  gap: 12px;
-  justify-items: start;
-  padding: 8px 0 2px;
-`
-
-const EmptyText = styled.span`
-  color: #67768a;
-  font-size: 13px;
-  line-height: 1.5;
-`
-
-const ActivityTimeline = styled.div`
-  display: grid;
-  gap: 12px;
-`
-
-const ActivityCard = styled.div`
-  display: grid;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid #dde6ef;
-  background: #fbfcfe;
-`
-
-const ActivityTop = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-`
-
-const ActivityMeta = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-`
-
-const ActivityTitle = styled.span`
-  color: #2b3f5d;
-  font-size: 14px;
-  font-weight: 700;
-`
-
-const ActivityText = styled.span`
-  color: #64748a;
-  font-size: 13px;
-  line-height: 1.5;
 `
 
 function SupplierPage() {
@@ -463,6 +331,12 @@ function SupplierPage() {
   }
 
   const primaryScenario = starterScenarios[0]
+  const entryModeLabel =
+    session.entry_mode === 'history'
+      ? 'С историей'
+      : session.entry_mode === 'context'
+      ? 'С контекстом'
+      : 'Пустой кабинет'
   const heroDescription =
     session.entry_mode === 'context'
       ? 'Организационный профиль уже подсказывает сегмент, но личная история действий еще не собрана. Запустите готовый сценарий, чтобы быстрее открыть спрос и конкуренцию.'
@@ -470,76 +344,122 @@ function SupplierPage() {
         ? 'Новый кабинет поставщика еще без сигналов и поисковой истории. Начните со стартового сценария и соберите первый рыночный срез.'
         : 'Отдельная рабочая зона для анализа конкурентов, категорий спроса и горячих возможностей по вашему сегменту.'
 
+  const openProductCard = (steId: string) => {
+    navigate(`/product/${steId}`)
+  }
+
   return (
     <PortalShell session={session} activeNav="supplier" onLogout={handleLogout}>
       <Main>
         <Hero>
           <HeroTop>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/')}>
+            <SurfaceButton $tone="neutral" $emphasis="soft" icon={<ArrowLeftOutlined />} onClick={() => navigate('/')}>
               Назад в кабинет
-            </Button>
-            <Tag color="orange" icon={<RiseOutlined />}>
+            </SurfaceButton>
+            <StatusPill $tone="supplier">
               Supplier Dashboard
-            </Tag>
+            </StatusPill>
           </HeroTop>
 
-          <div style={{ display: 'grid', gap: 8 }}>
-            <Typography.Title level={2} style={{ margin: 0, color: '#2b3950' }}>
-              Экран поставщика
-            </Typography.Title>
-            <Typography.Paragraph style={{ margin: 0, color: '#607085', fontSize: 16 }}>
-              {heroDescription}
-            </Typography.Paragraph>
-            <HeroTags>
-              <Tag color="orange">{session.persona ?? 'Поставщик'}</Tag>
-              <Tag color={session.entry_mode === 'history' ? 'blue' : 'gold'}>
-                {session.entry_mode === 'history'
-                  ? 'С историей'
-                  : session.entry_mode === 'context'
-                    ? 'С контекстом'
-                    : 'Пустой кабинет'}
-              </Tag>
-            </HeroTags>
-          </div>
+          <HeroBody>
+            <HeroIntroBlock>
+              <HeroEyebrow>Контур поставщика</HeroEyebrow>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <HeroTitle>
+                  Экран поставщика
+                </HeroTitle>
+                <HeroText>
+                  {heroDescription}
+                </HeroText>
+              </div>
+              <HeroTags>
+                <StatusPill $tone="supplier">{session.persona ?? 'Поставщик'}</StatusPill>
+                <StatusPill $tone={session.entry_mode === 'history' ? 'info' : 'warning'}>
+                  {entryModeLabel}
+                </StatusPill>
+              </HeroTags>
+              <HeroActionRow>
+                <SurfaceButton $tone="neutral" $emphasis="soft" icon={<AppstoreOutlined />} onClick={() => navigate('/')}>
+                  Перейти в каталог
+                </SurfaceButton>
+                <SurfaceButton $tone="accent" $emphasis="soft" icon={<ShoppingCartOutlined />} onClick={() => navigate('/cart')}>
+                  Открыть черновик закупки
+                </SurfaceButton>
+              </HeroActionRow>
+            </HeroIntroBlock>
+
+            <SnapshotGrid>
+              <SnapshotCard $tone="warm">
+                <SnapshotLabel>Режим</SnapshotLabel>
+                <SnapshotValue>{entryModeLabel}</SnapshotValue>
+                <SnapshotHint>{session.persona ?? 'Сегмент поставщика'}</SnapshotHint>
+              </SnapshotCard>
+              <SnapshotCard $tone="warm">
+                <SnapshotLabel>Стартовый фокус</SnapshotLabel>
+                <SnapshotValue>{primaryScenario?.title ?? 'Новый сценарий'}</SnapshotValue>
+                <SnapshotHint>
+                  {primaryScenario?.description ?? 'Выберите рабочий сценарий для анализа спроса.'}
+                </SnapshotHint>
+              </SnapshotCard>
+              <SnapshotCard $tone="warm">
+                <SnapshotLabel>Последние действия</SnapshotLabel>
+                <SnapshotValue>{(activityQuery.data?.items ?? []).length.toLocaleString('ru-RU')}</SnapshotValue>
+                <SnapshotHint>
+                  {(activityQuery.data?.items ?? []).length
+                    ? 'Лента активности уже показывает реальные поисковые и закупочные действия.'
+                    : 'После первых переходов по каталогу здесь появится рабочая активность.'}
+                </SnapshotHint>
+              </SnapshotCard>
+              <SnapshotCard $tone="warm">
+                <SnapshotLabel>Рыночный охват</SnapshotLabel>
+                <SnapshotValue>
+                  {supplierInsightsQuery.data
+                    ? supplierInsightsQuery.data.tracked_categories_count.toLocaleString('ru-RU')
+                    : '—'}
+                </SnapshotValue>
+                <SnapshotHint>Категории, в которых dashboard уже может строить контекст спроса.</SnapshotHint>
+              </SnapshotCard>
+            </SnapshotGrid>
+          </HeroBody>
 
           {supplierInsightsQuery.isLoading || summaryQuery.isLoading ? (
             <Skeleton active paragraph={{ rows: 6 }} />
           ) : supplierInsightsQuery.data && summaryQuery.data ? (
             <>
-              <SummaryGrid>
-                <SummaryCard>
-                  <SummaryValue>
+              <MetricGrid $columns={4}>
+                <MetricCard>
+                  <MetricValue $size="lg">
                     {supplierInsightsQuery.data.owned_catalog_items_count.toLocaleString('ru-RU')}
-                  </SummaryValue>
-                  <SummaryLabel>Позиции вашего ассортимента</SummaryLabel>
-                </SummaryCard>
-                <SummaryCard>
-                  <SummaryValue>
+                  </MetricValue>
+                  <MetricLabel>Позиции вашего ассортимента</MetricLabel>
+                </MetricCard>
+                <MetricCard>
+                  <MetricValue $size="lg">
                     {supplierInsightsQuery.data.owned_purchase_history_count.toLocaleString('ru-RU')}
-                  </SummaryValue>
-                  <SummaryLabel>Закупки по вашему сегменту</SummaryLabel>
-                </SummaryCard>
-                <SummaryCard>
-                  <SummaryValue>
+                  </MetricValue>
+                  <MetricLabel>Закупки по вашему сегменту</MetricLabel>
+                </MetricCard>
+                <MetricCard>
+                  <MetricValue $size="lg">
                     {supplierInsightsQuery.data.tracked_categories_count.toLocaleString('ru-RU')}
-                  </SummaryValue>
-                  <SummaryLabel>Категорий под наблюдением</SummaryLabel>
-                </SummaryCard>
-                <SummaryCard>
-                  <SummaryValue>
+                  </MetricValue>
+                  <MetricLabel>Категорий под наблюдением</MetricLabel>
+                </MetricCard>
+                <MetricCard>
+                  <MetricValue $size="lg">
                     {summaryQuery.data.suppliers_count.toLocaleString('ru-RU')}
-                  </SummaryValue>
-                  <SummaryLabel>Всего поставщиков в каталоге</SummaryLabel>
-                </SummaryCard>
-              </SummaryGrid>
+                  </MetricValue>
+                  <MetricLabel>Всего поставщиков в каталоге</MetricLabel>
+                </MetricCard>
+              </MetricGrid>
 
               <Actions>
-                <Button icon={<AppstoreOutlined />} onClick={() => navigate('/')}>
+                <SurfaceButton $tone="neutral" $emphasis="soft" icon={<AppstoreOutlined />} onClick={() => navigate('/')}>
                   Перейти в каталог
-                </Button>
-                <Button icon={<ShoppingCartOutlined />} onClick={() => navigate('/cart')}>
+                </SurfaceButton>
+                <SurfaceButton $tone="accent" $emphasis="soft" icon={<ShoppingCartOutlined />} onClick={() => navigate('/cart')}>
                   Открыть черновик закупки
-                </Button>
+                </SurfaceButton>
               </Actions>
             </>
           ) : (
@@ -548,7 +468,7 @@ function SupplierPage() {
         </Hero>
 
         {showOnboarding ? (
-          <OnboardingStrip>
+          <OnboardingSurface $tone="warm" $padding="lg">
             <OnboardingHeader>
               <OnboardingTitle>
                 {session.entry_mode === 'context'
@@ -566,23 +486,24 @@ function SupplierPage() {
             <OnboardingGrid>
               {starterScenarios.map((scenario) => (
                 <OnboardingCard
+                  $tone="warm"
                   key={scenario.key}
                   type="button"
                   onClick={() => openStarterScenario(scenario)}
                 >
-                  <Tag color="orange">Сценарий поставщика</Tag>
-                  <OnboardingCardTitle>{scenario.title}</OnboardingCardTitle>
+                  <StatusPill $tone="supplier">Сценарий поставщика</StatusPill>
+                  <OnboardingCardTitle $tone="warm">{scenario.title}</OnboardingCardTitle>
                   <OnboardingCardText>{scenario.description}</OnboardingCardText>
-                  <OnboardingCardAction>Открыть в каталоге</OnboardingCardAction>
+                  <OnboardingCardAction $tone="warm">Открыть в каталоге</OnboardingCardAction>
                 </OnboardingCard>
               ))}
             </OnboardingGrid>
-          </OnboardingStrip>
+          </OnboardingSurface>
         ) : null}
 
-        <SectionCard style={{ marginTop: 18 }}>
-          <HeroTop>
-            <SectionTitle level={3}>Последние действия</SectionTitle>
+        <SectionSurface $padding="md" style={{ marginTop: 18 }}>
+          <SectionHeaderBar>
+            <SectionHeading>Последние действия</SectionHeading>
             <Select
               size="middle"
               value={activityFilter}
@@ -590,7 +511,7 @@ function SupplierPage() {
               onChange={(value) => setActivityFilter(value as ActivityFilter)}
               options={activityFilterOptions}
             />
-          </HeroTop>
+          </SectionHeaderBar>
           {activityQuery.isLoading ? (
             <Skeleton active paragraph={{ rows: 5 }} />
           ) : filteredActivityItems.length ? (
@@ -599,75 +520,101 @@ function SupplierPage() {
                 <ActivityCard key={item.id}>
                   <ActivityTop>
                     <ActivityTitle>{item.title}</ActivityTitle>
-                    <Typography.Text style={{ color: '#7a889b', fontSize: 12 }}>
+                    <span style={{ color: '#7a889b', fontSize: 12 }}>
                       {formatDateTime(item.created_at)}
-                    </Typography.Text>
+                    </span>
                   </ActivityTop>
                   <ActivityMeta>
-                    <Tag color={getActivityColor(item.event_type)}>{item.event_type}</Tag>
-                    {item.query ? <Tag>{item.query}</Tag> : null}
-                    {item.ste_title ? <Tag color="geekblue">{item.ste_title}</Tag> : null}
+                    <StatusPill $tone={getActivityPillTone(item.event_type)}>{item.event_type}</StatusPill>
+                    {item.query ? <StatusPill $tone="neutral">{item.query}</StatusPill> : null}
+                    {item.ste_title ? <StatusPill $tone="info">{item.ste_title}</StatusPill> : null}
                   </ActivityMeta>
                   <ActivityText>{item.description}</ActivityText>
+                  <InlineActionRow>
+                    {item.query ? (
+                      <SurfaceButton $tone="neutral" $emphasis="soft" size="small" onClick={() => navigate('/', { state: { starterScenario: {
+                        key: `activity-${item.id}`,
+                        title: item.query ?? 'Повторный поиск',
+                        description: 'Запуск из ленты последних действий.',
+                        query: item.query ?? '',
+                      } } })}>
+                        Повторить поиск
+                      </SurfaceButton>
+                    ) : null}
+                    {item.ste_id ? (
+                      <SurfaceButton $tone="accent" $emphasis="soft" size="small" onClick={() => openProductCard(item.ste_id ?? '')}>
+                        Открыть карточку
+                      </SurfaceButton>
+                    ) : null}
+                    {(item.event_type === 'cart_added' ||
+                      item.event_type === 'cart_removed' ||
+                      item.event_type === 'cart_quantity_changed' ||
+                      item.event_type === 'purchase_intent' ||
+                      item.event_type === 'purchase_completed') ? (
+                      <SurfaceButton $tone="success" $emphasis="soft" size="small" onClick={() => navigate('/cart')}>
+                        Открыть корзину
+                      </SurfaceButton>
+                    ) : null}
+                  </InlineActionRow>
                 </ActivityCard>
               ))}
             </ActivityTimeline>
           ) : (activityQuery.data?.items ?? []).length ? (
-            <EmptyState>
+            <EmptyStateBlock $padding="compact">
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description="Для этого типа действий пока нет событий."
               />
-              <EmptyText>
+              <EmptyStateText>
                 Смените фильтр или продолжите работу в каталоге, чтобы собрать новые действия по
                 нужному сценарию.
-              </EmptyText>
-              <Button onClick={() => setActivityFilter('all')}>Показать все действия</Button>
-            </EmptyState>
+              </EmptyStateText>
+              <SurfaceButton $tone="neutral" $emphasis="soft" onClick={() => setActivityFilter('all')}>Показать все действия</SurfaceButton>
+            </EmptyStateBlock>
           ) : (
-            <EmptyState>
+            <EmptyStateBlock $padding="compact">
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description="История действий пока пуста."
               />
-              <EmptyText>
+              <EmptyStateText>
                 После первых поисков, открытий карточек и действий с shortlist здесь появится
                 живая лента поведения поставщика по текущему сегменту.
-              </EmptyText>
-              {session.entry_note ? <EmptyText>{session.entry_note}</EmptyText> : null}
+              </EmptyStateText>
+              {session.entry_note ? <EmptyStateText>{session.entry_note}</EmptyStateText> : null}
               {primaryScenario ? (
-                <Button type="primary" ghost onClick={() => openStarterScenario(primaryScenario)}>
+                <SurfaceButton $tone="accent" $emphasis="soft" onClick={() => openStarterScenario(primaryScenario)}>
                   Начать со сценария
-                </Button>
+                </SurfaceButton>
               ) : null}
-            </EmptyState>
+            </EmptyStateBlock>
           )}
-        </SectionCard>
+        </SectionSurface>
 
         {supplierInsightsQuery.isLoading ? (
-          <SectionCard style={{ marginTop: 18 }}>
+          <SectionSurface $padding="md" style={{ marginTop: 18 }}>
             <Skeleton active paragraph={{ rows: 10 }} />
-          </SectionCard>
+          </SectionSurface>
         ) : supplierInsightsQuery.data ? (
           <Grid>
-            <SectionCard>
-              <SectionTitle level={3}>Ваш контур</SectionTitle>
-              <InsightList>
+            <SectionSurface $padding="md">
+              <SectionHeading>Ваш контур</SectionHeading>
+              <DetailList>
                 {supplierInsightsQuery.data.matched_suppliers.length ? (
                   supplierInsightsQuery.data.matched_suppliers.map((item) => (
-                    <InsightCard key={item.id}>
-                      <InsightTitle>{item.name}</InsightTitle>
-                      <InsightMeta>
+                    <DetailCard key={item.id}>
+                      <DetailTitle>{item.name}</DetailTitle>
+                      <DetailMeta>
                         Позиций: {item.catalog_items_count.toLocaleString('ru-RU')}
-                      </InsightMeta>
-                      <InsightMeta>
+                      </DetailMeta>
+                      <DetailMeta>
                         Закупок: {item.purchase_history_count.toLocaleString('ru-RU')}
-                      </InsightMeta>
-                      <InsightMeta>Overlap токенов: {item.token_overlap}</InsightMeta>
-                    </InsightCard>
+                      </DetailMeta>
+                      <DetailMeta>Overlap токенов: {item.token_overlap}</DetailMeta>
+                    </DetailCard>
                   ))
                 ) : (
-                  <EmptyState>
+                  <EmptyStateBlock $padding="compact">
                     <Empty
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                       description={
@@ -676,38 +623,38 @@ function SupplierPage() {
                           : 'Совпавшие поставщики не найдены.'
                       }
                     />
-                    <EmptyText>
+                    <EmptyStateText>
                       {showOnboarding
                         ? 'Откройте стартовый сценарий и посмотрите, кто уже присутствует в вашем сегменте.'
                         : 'Попробуйте открыть каталог по смежной категории и проверить конкуренцию вручную.'}
-                    </EmptyText>
+                    </EmptyStateText>
                     {primaryScenario ? (
-                      <Button onClick={() => openStarterScenario(primaryScenario)}>
+                      <SurfaceButton $tone="neutral" $emphasis="soft" onClick={() => openStarterScenario(primaryScenario)}>
                         Открыть первый сценарий
-                      </Button>
+                      </SurfaceButton>
                     ) : null}
-                  </EmptyState>
+                  </EmptyStateBlock>
                 )}
-              </InsightList>
-            </SectionCard>
+              </DetailList>
+            </SectionSurface>
 
-            <SectionCard>
-              <SectionTitle level={3}>Спрос по категориям</SectionTitle>
-              <InsightList>
+            <SectionSurface $padding="md">
+              <SectionHeading>Спрос по категориям</SectionHeading>
+              <DetailList>
                 {supplierInsightsQuery.data.top_demand_categories.length ? (
                   supplierInsightsQuery.data.top_demand_categories.map((item) => (
-                    <InsightCard key={item.id}>
-                      <InsightTitle>{item.name}</InsightTitle>
-                      <InsightMeta>
+                    <DetailCard key={item.id}>
+                      <DetailTitle>{item.name}</DetailTitle>
+                      <DetailMeta>
                         Позиций в категории: {item.catalog_items_count.toLocaleString('ru-RU')}
-                      </InsightMeta>
-                      <InsightMeta>
+                      </DetailMeta>
+                      <DetailMeta>
                         Закупок по истории: {item.purchase_count.toLocaleString('ru-RU')}
-                      </InsightMeta>
-                    </InsightCard>
+                      </DetailMeta>
+                    </DetailCard>
                   ))
                 ) : (
-                  <EmptyState>
+                  <EmptyStateBlock $padding="compact">
                     <Empty
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                       description={
@@ -716,76 +663,76 @@ function SupplierPage() {
                           : 'Спросовые категории пока не определены.'
                       }
                     />
-                    <EmptyText>
+                    <EmptyStateText>
                       {showOnboarding
                         ? 'После первых поисков dashboard сможет показать, где в вашем сегменте есть устойчивый спрос.'
                         : 'Добавьте больше поисковых сигналов через каталог, чтобы расширить категорийный срез.'}
-                    </EmptyText>
+                    </EmptyStateText>
                     {primaryScenario ? (
-                      <Button type="primary" ghost onClick={() => openStarterScenario(primaryScenario)}>
+                      <SurfaceButton $tone="accent" $emphasis="soft" onClick={() => openStarterScenario(primaryScenario)}>
                         Посмотреть спрос в каталоге
-                      </Button>
+                      </SurfaceButton>
                     ) : null}
-                  </EmptyState>
+                  </EmptyStateBlock>
                 )}
-              </InsightList>
-            </SectionCard>
+              </DetailList>
+            </SectionSurface>
 
-            <SectionCard>
-              <SectionTitle level={3}>Топ конкурентов</SectionTitle>
-              <InsightList>
+            <SectionSurface $padding="md">
+              <SectionHeading>Топ конкурентов</SectionHeading>
+              <DetailList>
                 {supplierInsightsQuery.data.top_competitors.length ? (
                   supplierInsightsQuery.data.top_competitors.map((item) => (
-                    <InsightCard key={item.id}>
-                      <InsightTitle>{item.name}</InsightTitle>
-                      <InsightMeta>
+                    <DetailCard key={item.id}>
+                      <DetailTitle>{item.name}</DetailTitle>
+                      <DetailMeta>
                         Позиций в каталоге: {item.catalog_items_count.toLocaleString('ru-RU')}
-                      </InsightMeta>
-                      <InsightMeta>
+                      </DetailMeta>
+                      <DetailMeta>
                         Закупок в смежных категориях: {item.purchase_history_count.toLocaleString('ru-RU')}
-                      </InsightMeta>
-                    </InsightCard>
+                      </DetailMeta>
+                    </DetailCard>
                   ))
                 ) : (
-                  <EmptyState>
+                  <EmptyStateBlock $padding="compact">
                     <Empty
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                       description={
                         showOnboarding ? 'Конкуренты пока не определены.' : 'Конкуренты пока не найдены.'
                       }
                     />
-                    <EmptyText>
+                    <EmptyStateText>
                       {showOnboarding
                         ? 'Готовый сценарий быстро покажет смежных поставщиков и поможет собрать конкурентный контур.'
                         : 'Переключитесь в каталог и проверьте смежные позиции, чтобы обновить конкурентную картину.'}
-                    </EmptyText>
+                    </EmptyStateText>
                     {primaryScenario ? (
-                      <Button onClick={() => openStarterScenario(primaryScenario)}>
+                      <SurfaceButton $tone="neutral" $emphasis="soft" onClick={() => openStarterScenario(primaryScenario)}>
                         Открыть конкурентный сценарий
-                      </Button>
+                      </SurfaceButton>
                     ) : null}
-                  </EmptyState>
+                  </EmptyStateBlock>
                 )}
-              </InsightList>
-            </SectionCard>
+              </DetailList>
+            </SectionSurface>
 
-            <SectionCard>
-              <SectionTitle level={3}>Горячие возможности</SectionTitle>
-              <InsightList>
+            <SectionSurface $padding="md">
+              <SectionHeading>Горячие возможности</SectionHeading>
+              <DetailList>
                 {supplierInsightsQuery.data.hot_opportunities.length ? (
                   supplierInsightsQuery.data.hot_opportunities.map((item) => (
-                    <InsightCard key={item.ste_id}>
-                      <InsightTitle>{item.title}</InsightTitle>
-                      <InsightMeta>
+                    <DetailCard key={item.ste_id}>
+                      <DetailTitle>{item.title}</DetailTitle>
+                      <DetailMeta>
                         {item.category_name} · {item.supplier_name}
-                      </InsightMeta>
-                      <InsightMeta>
+                      </DetailMeta>
+                      <DetailMeta>
                         Закупок в истории: {item.purchase_count.toLocaleString('ru-RU')}
-                      </InsightMeta>
-                    </InsightCard>
+                      </DetailMeta>
+                    </DetailCard>
                   ))
                 ) : (
-                  <EmptyState>
+                  <EmptyStateBlock $padding="compact">
                     <Empty
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                       description={
@@ -794,18 +741,18 @@ function SupplierPage() {
                           : 'Горячие позиции пока не определены.'
                       }
                     />
-                    <EmptyText>
+                    <EmptyStateText>
                       {showOnboarding
                         ? 'После первых поисков и переходов по каталогу здесь появятся позиции с заметным спросом по вашему профилю.'
                         : 'Расширьте поисковые действия в каталоге, чтобы dashboard начал выделять горячие позиции.'}
-                    </EmptyText>
-                    <Button icon={<AppstoreOutlined />} onClick={() => navigate('/')}>
+                    </EmptyStateText>
+                    <SurfaceButton $tone="neutral" $emphasis="soft" icon={<AppstoreOutlined />} onClick={() => navigate('/')}>
                       Перейти в каталог
-                    </Button>
-                  </EmptyState>
+                    </SurfaceButton>
+                  </EmptyStateBlock>
                 )}
-              </InsightList>
-            </SectionCard>
+              </DetailList>
+            </SectionSurface>
           </Grid>
         ) : null}
       </Main>

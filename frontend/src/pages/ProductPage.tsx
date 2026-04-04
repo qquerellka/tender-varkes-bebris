@@ -5,7 +5,7 @@ import {
   ShoppingCartOutlined,
   SwapOutlined,
 } from '@ant-design/icons'
-import { Button, Empty, Skeleton, Tag, Typography, message } from 'antd'
+import { Empty, Skeleton, Typography, message } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -35,6 +35,17 @@ import {
   readLastSearchSessionId,
   readStoredSession,
 } from '@shared/lib/portal-session'
+import {
+  DetailCard,
+  DetailMeta,
+  DetailTitle,
+  HintSurface,
+  HintText,
+  SectionHeading,
+  SectionSurface,
+  StatusPill,
+  SurfaceButton,
+} from '@shared/ui/dashboard-surfaces'
 import PortalShell from '@widgets/portal-shell/PortalShell'
 
 function buildCardTone(id: string) {
@@ -134,8 +145,49 @@ const VisualLabel = styled.span`
 
 const Info = styled.div`
   display: grid;
-  gap: 16px;
+  gap: 18px;
   align-content: start;
+`
+
+const ContextRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+`
+
+const ContextChip = styled.span<{ $tone?: 'neutral' | 'accent' | 'success' | 'warning' }>`
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border: 1px solid
+    ${({ $tone = 'neutral' }) =>
+      $tone === 'accent'
+        ? '#cfdcf0'
+        : $tone === 'success'
+        ? '#cfe6da'
+        : $tone === 'warning'
+        ? '#eadac0'
+        : '#dde5ee'};
+  color: ${({ $tone = 'neutral' }) =>
+    $tone === 'accent'
+      ? '#2f4f84'
+      : $tone === 'success'
+      ? '#226246'
+      : $tone === 'warning'
+      ? '#7a5a1d'
+      : '#5e6f84'};
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: ${({ $tone = 'neutral' }) =>
+    $tone === 'accent'
+      ? '#f3f7fd'
+      : $tone === 'success'
+      ? '#eef8f2'
+      : $tone === 'warning'
+      ? '#fff8ea'
+      : '#f8fbfe'};
 `
 
 const MetaGrid = styled.div`
@@ -150,46 +202,31 @@ const MetaGrid = styled.div`
 
 const MetaCard = styled.div`
   display: grid;
-  gap: 4px;
+  gap: 3px;
   padding: 12px 14px;
   border: 1px solid #e1e8f0;
   background: #fbfcfe;
 `
 
 const MetaLabel = styled.span`
-  color: #7a889b;
-  font-size: 12px;
+  color: #7c8a9b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 `
 
 const MetaValue = styled.span`
-  color: #2a3f5e;
-  font-size: 15px;
+  color: #31455f;
+  font-size: 14px;
   font-weight: 700;
+  line-height: 1.45;
 `
 
 const Actions = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-`
-
-const SectionCard = styled.section`
-  display: grid;
-  gap: 14px;
-  margin-top: 18px;
-  padding: 18px;
-  border: 1px solid #dee6ee;
-  background: #fff;
-  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
-`
-
-const SectionTitle = styled(Typography.Title)`
-  && {
-    margin: 0;
-    color: #30415a;
-    font-size: 18px;
-    font-weight: 700;
-  }
 `
 
 const AttributeGrid = styled.div`
@@ -204,7 +241,7 @@ const AttributeGrid = styled.div`
 
 const AttributeCard = styled.div`
   display: grid;
-  gap: 4px;
+  gap: 3px;
   padding: 12px 14px;
   border: 1px solid #dce4ec;
   background: #fbfcfd;
@@ -212,8 +249,12 @@ const AttributeCard = styled.div`
 
 const RelatedGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+
+  @media (max-width: 1200px) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 
   @media (max-width: 920px) {
     grid-template-columns: 1fr;
@@ -222,48 +263,147 @@ const RelatedGrid = styled.div`
 
 const RelatedCard = styled.div`
   display: grid;
-  gap: 8px;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 10px;
   padding: 14px;
   border: 1px solid #e1e8f0;
   background: #fbfcfe;
+  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
 `
 
-const InsightPanel = styled.div`
+const RelatedTop = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+`
+
+const RelatedStamp = styled.span`
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 6px 10px;
+  border: 1px solid #d7e1ec;
+  color: #58708f;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #f8fbfe;
+`
+
+const RelatedVisual = styled.button<{ $from: string; $to: string }>`
+  position: relative;
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid #dde6ef;
-  background: #fbfcfe;
+  place-items: center;
+  min-height: 150px;
+  overflow: hidden;
+  border: 1px solid #edf2f7;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(255, 255, 255, 0.9), transparent 28%),
+    linear-gradient(180deg, ${({ $to }) => $to} 0%, #ffffff 42%, #ffffff 100%);
+  cursor: pointer;
+
+  &::before {
+    position: absolute;
+    inset: 18px 24px auto;
+    height: 96px;
+    border-radius: 50%;
+    background: radial-gradient(circle, ${({ $from }) => $from} 0%, rgba(255, 255, 255, 0) 70%);
+    content: '';
+    filter: blur(8px);
+    opacity: 0.78;
+  }
 `
 
-const InsightText = styled.span`
-  color: #64748a;
-  font-size: 14px;
-  line-height: 1.55;
+const RelatedVisualLabel = styled.span`
+  position: relative;
+  z-index: 1;
+  color: rgba(35, 53, 77, 0.72);
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
 `
 
-const InsightList = styled.div`
+const RelatedTitle = styled.button`
+  padding: 0;
+  border: 0;
+  color: #2f3b4c;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+`
+
+const RelatedMeta = styled.div`
   display: grid;
-  gap: 10px;
+  gap: 8px;
 `
 
-const InsightCard = styled.div`
+const RelatedMetaCard = styled.div`
   display: grid;
-  gap: 4px;
-  padding: 12px 14px;
+  gap: 3px;
+  padding: 10px 12px;
   border: 1px solid #e1e8f0;
   background: #ffffff;
 `
 
-const InsightTitle = styled.span`
-  color: #2b3f5d;
-  font-size: 14px;
+const RelatedMetaLabel = styled.span`
+  color: #7c8a9b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+`
+
+const RelatedMetaValue = styled.span`
+  color: #31455f;
+  font-size: 13px;
+  line-height: 1.45;
+`
+
+const RelatedReasonPanel = styled.div`
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid #dce5ee;
+  background: linear-gradient(180deg, #fbfcfe 0%, #ffffff 100%);
+`
+
+const RelatedReasonHeader = styled.div`
+  color: #405672;
+  font-size: 12px;
   font-weight: 700;
 `
 
-const InsightActions = styled.div`
+const RelatedReasonList = styled.div`
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+`
+
+const RelatedReasonChip = styled.span`
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-left: 3px solid #2f4f84;
+  color: #596a7f;
+  font-size: 12px;
+  line-height: 1.35;
+  background: #f6f9fd;
+`
+
+const RelatedActions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+`
+
+const ExplainabilitySummary = styled.div`
+  display: grid;
   gap: 10px;
 `
 
@@ -505,11 +645,14 @@ function ProductPage() {
   const [from, to] = buildCardTone(safeSteId)
   const item = detailQuery.data
   const backPath = session.role === 'supplier' ? '/supplier' : '/'
+  const inFavorites = item ? favoriteIds.has(item.id) : false
+  const inComparison = item ? comparisonIds.has(item.id) : false
+  const inCart = item ? cartMap.has(item.id) : false
   const explainabilityNotes = item
     ? buildExplainabilityNotes(session.entry_mode, item, {
-        inFavorites: favoriteIds.has(item.id),
-        inComparison: comparisonIds.has(item.id),
-        inCart: cartMap.has(item.id),
+        inFavorites,
+        inComparison,
+        inCart,
         hasSessionContext: Boolean(sessionId),
       })
     : []
@@ -565,14 +708,14 @@ function ProductPage() {
       <Main onCopyCapture={handleCopyCapture}>
         <HeroCard>
           <HeroTop>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(backPath)}>
+            <SurfaceButton $tone="neutral" $emphasis="soft" icon={<ArrowLeftOutlined />} onClick={() => navigate(backPath)}>
               Назад в каталог
-            </Button>
+            </SurfaceButton>
             {item ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                <Tag color="blue">{item.category_name}</Tag>
-                <Tag>{item.supplier_name}</Tag>
-                <Tag color="gold">{item.status}</Tag>
+                <StatusPill $tone="info">{item.category_name}</StatusPill>
+                <StatusPill $tone="neutral">{item.supplier_name}</StatusPill>
+                <StatusPill $tone="warning">{item.status}</StatusPill>
               </div>
             ) : null}
           </HeroTop>
@@ -595,6 +738,20 @@ function ProductPage() {
                   </Typography.Paragraph>
                 </div>
 
+                <ContextRow>
+                  <ContextChip $tone="neutral">ID {item.id}</ContextChip>
+                  <ContextChip $tone="accent">
+                    {session.entry_mode === 'history'
+                      ? 'С историей'
+                      : session.entry_mode === 'context'
+                      ? 'С контекстом'
+                      : 'Пустой кабинет'}
+                  </ContextChip>
+                  {inFavorites ? <ContextChip $tone="accent">Избранное</ContextChip> : null}
+                  {inComparison ? <ContextChip $tone="warning">Сравнение</ContextChip> : null}
+                  {inCart ? <ContextChip $tone="success">В корзине</ContextChip> : null}
+                </ContextRow>
+
                 <MetaGrid>
                   <MetaCard>
                     <MetaLabel>ID СТЕ</MetaLabel>
@@ -610,37 +767,56 @@ function ProductPage() {
                   </MetaCard>
                   <MetaCard>
                     <MetaLabel>Состояние</MetaLabel>
-                    <MetaValue>{cartMap.has(item.id) ? 'В закупочной подборке' : item.status}</MetaValue>
+                    <MetaValue>{inCart ? 'В закупочной подборке' : item.status}</MetaValue>
                   </MetaCard>
                 </MetaGrid>
 
+                <HintSurface>
+                  <HintText>
+                    {session.role === 'supplier'
+                      ? 'Карточка продолжает supplier-контур: здесь видно, насколько позиция полезна для конкурентного анализа и рыночного спроса.'
+                      : 'Карточка продолжает product-card из каталога: здесь можно закрепить позицию в shortlist, compare-flow и закупочном черновике.'}
+                  </HintText>
+                  <HintText>
+                    {inCart
+                      ? 'Позиция уже влияет на рабочий подбор. Следующий полезный шаг: проверить похожие карточки и сравнить их по параметрам.'
+                      : inComparison
+                      ? 'Позиция уже участвует в сравнении. Можно быстро проверить похожие карточки ниже и усилить shortlist.'
+                      : 'Если позиция подходит, закрепите ее в избранном, сравнении или корзине, чтобы это стало явным рабочим сигналом.'}
+                  </HintText>
+                </HintSurface>
+
                 <Actions>
-                  <Button
-                    icon={favoriteIds.has(item.id) ? <HeartFilled /> : <HeartOutlined />}
+                  <SurfaceButton
+                    $tone={inFavorites ? 'accent' : 'neutral'}
+                    $emphasis={inFavorites ? 'soft' : 'outline'}
+                    icon={inFavorites ? <HeartFilled /> : <HeartOutlined />}
                     onClick={() =>
                       favoriteMutation.mutate({
-                        active: favoriteIds.has(item.id),
+                        active: inFavorites,
                       })
                     }
                   >
-                    {favoriteIds.has(item.id) ? 'В избранном' : 'В избранное'}
-                  </Button>
-                  <Button
+                    {inFavorites ? 'В избранном' : 'В избранное'}
+                  </SurfaceButton>
+                  <SurfaceButton
+                    $tone={inComparison ? 'accent' : 'neutral'}
+                    $emphasis={inComparison ? 'soft' : 'outline'}
                     icon={<SwapOutlined />}
                     onClick={() =>
                       comparisonMutation.mutate({
-                        active: comparisonIds.has(item.id),
+                        active: inComparison,
                       })
                     }
                   >
-                    {comparisonIds.has(item.id) ? 'В сравнении' : 'Сравнить'}
-                  </Button>
-                  <Button type="primary" icon={<ShoppingCartOutlined />} onClick={() => cartMutation.mutate()}>
-                    {cartMap.has(item.id) ? 'Добавить ещё' : 'В корзину'}
-                  </Button>
-                  <Button danger onClick={markIrrelevant}>
+                    {inComparison ? 'В сравнении' : 'Сравнить'}
+                  </SurfaceButton>
+                  <SurfaceButton $tone={inCart ? 'success' : 'accent'} $emphasis={inCart ? 'soft' : 'solid'} icon={<ShoppingCartOutlined />} onClick={() => cartMutation.mutate()}>
+                    {inCart ? 'Добавить ещё' : 'В корзину'}
+                  </SurfaceButton>
+                  <SurfaceButton $tone="danger" $emphasis="soft" onClick={markIrrelevant}>
                     Нерелевантно
-                  </Button>
+                  </SurfaceButton>
                 </Actions>
               </Info>
             </HeroGrid>
@@ -651,44 +827,44 @@ function ProductPage() {
 
         {item ? (
           <>
-            <SectionCard>
-              <SectionTitle level={3}>Почему карточка может быть полезна</SectionTitle>
-              <InsightPanel>
-                <InsightText>
+            <SectionSurface $padding="md" style={{ marginTop: 18 }}>
+              <SectionHeading>Почему карточка может быть полезна</SectionHeading>
+              <HintSurface>
+                <HintText>
                   {session.role === 'supplier'
                     ? 'Для поставщика карточка помогает оценить смежный спрос, конкурентов и то, насколько позиция вписывается в рабочий сегмент.'
                     : 'Для заказчика карточка помогает понять, подходит ли позиция под текущий сценарий закупки и стоит ли закрепить ее в shortlist.'}
-                </InsightText>
-                {session.entry_note ? <InsightText>{session.entry_note}</InsightText> : null}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  <Tag color={session.entry_mode === 'history' ? 'blue' : 'gold'}>
+                </HintText>
+                {session.entry_note ? <HintText>{session.entry_note}</HintText> : null}
+                <ContextRow>
+                  <StatusPill $tone={session.entry_mode === 'history' ? 'info' : 'warning'}>
                     {session.entry_mode === 'history'
                       ? 'С историей'
                       : session.entry_mode === 'context'
                       ? 'С контекстом'
                       : 'Пустой кабинет'}
-                  </Tag>
-                  {favoriteIds.has(item.id) ? <Tag color="magenta">В избранном</Tag> : null}
-                  {comparisonIds.has(item.id) ? <Tag color="purple">В сравнении</Tag> : null}
-                  {cartMap.has(item.id) ? <Tag color="green">В корзине</Tag> : null}
-                </div>
-              </InsightPanel>
-              <InsightList>
+                  </StatusPill>
+                  {inFavorites ? <StatusPill $tone="purple">В избранном</StatusPill> : null}
+                  {inComparison ? <StatusPill $tone="purple">В сравнении</StatusPill> : null}
+                  {inCart ? <StatusPill $tone="success">В корзине</StatusPill> : null}
+                </ContextRow>
+              </HintSurface>
+              <ExplainabilitySummary>
                 {explainabilityNotes.map((note) => (
-                  <InsightCard key={note.title}>
-                    <InsightTitle>{note.title}</InsightTitle>
-                    <InsightText>{note.text}</InsightText>
-                  </InsightCard>
+                  <DetailCard key={note.title}>
+                    <DetailTitle>{note.title}</DetailTitle>
+                    <DetailMeta>{note.text}</DetailMeta>
+                  </DetailCard>
                 ))}
-              </InsightList>
-              <InsightActions>
-                <Button onClick={() => navigate(backPath)}>Вернуться к выдаче</Button>
-                <Button onClick={() => navigate('/cart')}>Открыть корзину</Button>
-              </InsightActions>
-            </SectionCard>
+              </ExplainabilitySummary>
+              <Actions>
+                <SurfaceButton $tone="neutral" $emphasis="soft" onClick={() => navigate(backPath)}>Вернуться к выдаче</SurfaceButton>
+                <SurfaceButton $tone="accent" $emphasis="soft" onClick={() => navigate('/cart')}>Открыть корзину</SurfaceButton>
+              </Actions>
+            </SectionSurface>
 
-            <SectionCard>
-              <SectionTitle level={3}>Характеристики</SectionTitle>
+            <SectionSurface $padding="md" style={{ marginTop: 18 }}>
+              <SectionHeading>Характеристики</SectionHeading>
               <AttributeGrid>
                 {Object.entries(item.attributes).length ? (
                   Object.entries(item.attributes).map(([key, value]) => (
@@ -703,57 +879,91 @@ function ProductPage() {
                   <Typography.Text type="secondary">Характеристики пока не заполнены.</Typography.Text>
                 )}
               </AttributeGrid>
-            </SectionCard>
+            </SectionSurface>
 
-            <SectionCard>
-              <SectionTitle level={3}>Похожие позиции</SectionTitle>
+            <SectionSurface $padding="md" style={{ marginTop: 18 }}>
+              <SectionHeading>Похожие позиции</SectionHeading>
               {relatedQuery.isLoading ? (
                 <Skeleton active paragraph={{ rows: 6 }} />
               ) : (
                 <RelatedGrid>
                   {(relatedQuery.data ?? []).length ? (
-                    relatedQuery.data?.map((relatedItem) => (
-                      <RelatedCard key={relatedItem.id}>
-                        <Typography.Text strong>{relatedItem.title}</Typography.Text>
-                        <Typography.Text style={{ color: '#647487' }}>
-                          {relatedItem.category_name} · {relatedItem.supplier_name}
-                        </Typography.Text>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                          {relatedItem.reasons.map((reason) => (
-                            <Tag key={reason}>{formatRelatedReason(reason)}</Tag>
-                          ))}
-                        </div>
-                        <div>
-                          <Button onClick={() => navigate(buildProductPath(relatedItem.id, sessionId))}>
-                            Открыть карточку
-                          </Button>
-                        </div>
-                      </RelatedCard>
-                    ))
+                    relatedQuery.data?.map((relatedItem) => {
+                      const [relatedFrom, relatedTo] = buildCardTone(relatedItem.id)
+                      return (
+                        <RelatedCard key={relatedItem.id}>
+                          <RelatedTop>
+                            <RelatedStamp>ID СТЕ {relatedItem.id}</RelatedStamp>
+                            <StatusPill $tone="accent">Похожая позиция</StatusPill>
+                          </RelatedTop>
+                          <RelatedVisual
+                            type="button"
+                            $from={relatedFrom}
+                            $to={relatedTo}
+                            onClick={() => navigate(buildProductPath(relatedItem.id, sessionId))}
+                          >
+                            <RelatedVisualLabel>{buildCardLabel(relatedItem.title)}</RelatedVisualLabel>
+                          </RelatedVisual>
+                          <RelatedTitle
+                            type="button"
+                            onClick={() => navigate(buildProductPath(relatedItem.id, sessionId))}
+                          >
+                            {relatedItem.title}
+                          </RelatedTitle>
+                          <RelatedMeta>
+                            <RelatedMetaCard>
+                              <RelatedMetaLabel>Категория</RelatedMetaLabel>
+                              <RelatedMetaValue>{relatedItem.category_name}</RelatedMetaValue>
+                            </RelatedMetaCard>
+                            <RelatedMetaCard>
+                              <RelatedMetaLabel>Поставщик</RelatedMetaLabel>
+                              <RelatedMetaValue>{relatedItem.supplier_name}</RelatedMetaValue>
+                            </RelatedMetaCard>
+                          </RelatedMeta>
+                          <RelatedReasonPanel>
+                            <RelatedReasonHeader>Почему карточка показана</RelatedReasonHeader>
+                            <RelatedReasonList>
+                              {relatedItem.reasons.map((reason) => (
+                                <RelatedReasonChip key={reason}>
+                                  {formatRelatedReason(reason)}
+                                </RelatedReasonChip>
+                              ))}
+                            </RelatedReasonList>
+                          </RelatedReasonPanel>
+                          <RelatedActions>
+                            <SurfaceButton $tone="neutral" $emphasis="soft" onClick={() => navigate(buildProductPath(relatedItem.id, sessionId))}>
+                              Открыть карточку
+                            </SurfaceButton>
+                          </RelatedActions>
+                        </RelatedCard>
+                      )
+                    })
                   ) : (
-                    <InsightPanel>
-                      <InsightText>
+                    <HintSurface>
+                      <HintText>
                         Похожие позиции пока не найдены. Это нормально для нового или узкого
                         сценария: закрепите карточку в избранном, сравнении или корзине, чтобы
                         быстрее собрать смежный контекст.
-                      </InsightText>
-                      <InsightActions>
-                        <Button
+                      </HintText>
+                      <Actions>
+                        <SurfaceButton
+                          $tone={inFavorites ? 'success' : 'accent'}
+                          $emphasis="soft"
                           onClick={() =>
                             favoriteMutation.mutate({
-                              active: favoriteIds.has(item.id),
+                              active: inFavorites,
                             })
                           }
                         >
-                          {favoriteIds.has(item.id) ? 'Уже в избранном' : 'Добавить в избранное'}
-                        </Button>
-                        <Button onClick={() => navigate(backPath)}>Назад к каталогу</Button>
-                      </InsightActions>
-                    </InsightPanel>
+                          {inFavorites ? 'Уже в избранном' : 'Добавить в избранное'}
+                        </SurfaceButton>
+                        <SurfaceButton $tone="neutral" $emphasis="soft" onClick={() => navigate(backPath)}>Назад к каталогу</SurfaceButton>
+                      </Actions>
+                    </HintSurface>
                   )}
                 </RelatedGrid>
               )}
-            </SectionCard>
+            </SectionSurface>
           </>
         ) : null}
       </Main>
