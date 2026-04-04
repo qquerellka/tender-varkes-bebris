@@ -2,6 +2,7 @@ import logging
 import pickle
 import re
 import threading
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +107,8 @@ class SearchRepository:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        allowed_document_ids: set[str] | None = None,
+        limit: int = 80,
     ) -> list[SearchCandidateHit]:
         lexical_terms = self._flatten_search_terms(query_terms)
         morphology_terms = self._flatten_search_terms(morphology_query_terms or [])
@@ -139,7 +142,8 @@ class SearchRepository:
             strict_match=strict_match,
             category_id=category_id,
             supplier_id=supplier_id,
-            limit=80,
+            allowed_document_ids=allowed_document_ids,
+            limit=limit,
         )
         if not retrieval_results:
             return []
@@ -211,11 +215,9 @@ class SearchRepository:
         if cache is not None:
             return cache
 
-        vocabulary = self._build_search_vocabulary(self._get_hybrid_index())
+        spell_vocabulary = self.get_search_spell_vocabulary()
+        vocabulary = set(spell_vocabulary.tokens)
         self.__class__._search_vocabulary_cache = vocabulary
-        self.__class__._search_spell_vocabulary_cache = build_spell_vocabulary_index(
-            vocabulary
-        )
         return vocabulary
 
     def get_search_spell_vocabulary(self) -> SpellVocabularyIndex:
@@ -223,9 +225,9 @@ class SearchRepository:
         if cache is not None:
             return cache
 
-        vocabulary = self.get_search_vocabulary()
-        cache = build_spell_vocabulary_index(vocabulary)
+        cache = self._build_search_spell_vocabulary(self._get_hybrid_index())
         self.__class__._search_spell_vocabulary_cache = cache
+        self.__class__._search_vocabulary_cache = set(cache.tokens)
         return cache
 
     def _get_hybrid_index(self) -> HybridSearchIndex:
@@ -243,11 +245,9 @@ class SearchRepository:
             if persisted_cache is not None:
                 self.__class__._hybrid_index_cache = persisted_cache
                 self.__class__._hybrid_index_signature = signature
-                vocabulary = self._build_search_vocabulary(persisted_cache)
-                self.__class__._search_vocabulary_cache = vocabulary
-                self.__class__._search_spell_vocabulary_cache = build_spell_vocabulary_index(
-                    vocabulary
-                )
+                spell_vocabulary = self._build_search_spell_vocabulary(persisted_cache)
+                self.__class__._search_vocabulary_cache = set(spell_vocabulary.tokens)
+                self.__class__._search_spell_vocabulary_cache = spell_vocabulary
                 return persisted_cache
 
             documents = self._build_search_documents()
@@ -258,11 +258,9 @@ class SearchRepository:
             )
             self.__class__._hybrid_index_cache = cache
             self.__class__._hybrid_index_signature = signature
-            vocabulary = self._build_search_vocabulary(cache)
-            self.__class__._search_vocabulary_cache = vocabulary
-            self.__class__._search_spell_vocabulary_cache = build_spell_vocabulary_index(
-                vocabulary
-            )
+            spell_vocabulary = self._build_search_spell_vocabulary(cache)
+            self.__class__._search_vocabulary_cache = set(spell_vocabulary.tokens)
+            self.__class__._search_spell_vocabulary_cache = spell_vocabulary
             self._save_persisted_hybrid_index(signature, cache)
             return cache
 
@@ -289,7 +287,16 @@ class SearchRepository:
         ]
 
     def _build_search_vocabulary(self, index: HybridSearchIndex) -> set[str]:
+        return set(self._build_search_spell_vocabulary(index).tokens)
+
+    def _build_search_spell_vocabulary(
+        self,
+        index: HybridSearchIndex,
+    ) -> SpellVocabularyIndex:
         vocabulary: set[str] = set()
+        token_document_frequencies: Counter[str] = Counter()
+        protected_tokens: set[str] = set()
+        min_document_frequency = 1 if len(index.documents) < 25 else 2
 
         for row in self.session.execute(
             select(SpellCorrectionModel.wrong_term, SpellCorrectionModel.correct_term)
@@ -302,12 +309,31 @@ class SearchRepository:
             vocabulary.update(self._extract_tokens(row.synonym))
 
         for document in index.documents:
-            for tokens in document.field_term_sets.values():
-                vocabulary.update(tokens)
-            for tokens in document.field_lemma_sets.values():
-                vocabulary.update(tokens)
+            useful_document_tokens: set[str] = set()
+            for field_name in ("title", "category", "attributes"):
+                useful_document_tokens.update(document.field_term_sets[field_name])
 
-        return vocabulary
+            token_document_frequencies.update(
+                token
+                for token in useful_document_tokens
+                if len(token) >= 3 and not token.isdigit()
+            )
+            protected_tokens.update(document.combined_analysis.brand_terms)
+            protected_tokens.update(document.combined_analysis.model_terms)
+            protected_tokens.update(document.combined_analysis.code_terms)
+            protected_tokens.update(document.combined_analysis.size_terms)
+
+        vocabulary.update(
+            token
+            for token, frequency in token_document_frequencies.items()
+            if frequency >= min_document_frequency
+        )
+
+        return build_spell_vocabulary_index(
+            vocabulary,
+            token_frequencies=token_document_frequencies,
+            protected_tokens=protected_tokens,
+        )
 
     @classmethod
     def _resolve_search_index_cache_path(cls) -> Path | None:

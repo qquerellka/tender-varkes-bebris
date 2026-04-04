@@ -205,6 +205,8 @@ class CatalogService:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        allowed_document_ids: set[str] | None = None,
+        limit: int = 80,
     ) -> list[STEItemRead]:
         return [
             STEItemRead(
@@ -230,6 +232,8 @@ class CatalogService:
                     strict_match=strict_match,
                     category_id=category_id,
                     supplier_id=supplier_id,
+                    allowed_document_ids=allowed_document_ids,
+                    limit=limit,
                 )
             )
         ]
@@ -245,6 +249,8 @@ class CatalogService:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        allowed_document_ids: set[str] | None = None,
+        limit: int = 80,
     ) -> list[SearchableSTEItemRead]:
         return [
             SearchableSTEItemRead(
@@ -273,6 +279,8 @@ class CatalogService:
                 strict_match=strict_match,
                 category_id=category_id,
                 supplier_id=supplier_id,
+                allowed_document_ids=allowed_document_ids,
+                limit=limit,
             )
         ]
 

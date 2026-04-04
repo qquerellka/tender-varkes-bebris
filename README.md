@@ -56,7 +56,9 @@ docker compose up --build
 
 - retrieval переписан под новый каталог из `ML/data/orig`
 - тяжёлые retrieval-каналы работают по shortlist кандидатов, а не по всему каталогу
-- typo/fuzzy correction больше не сканирует весь словарь на каждый запрос
+- typo/fuzzy correction больше не сканирует весь словарь на каждый запрос, а использует spell vocabulary по полезным catalog-токенам
+- query correction теперь формирует набор variants с confidence: high-confidence вариант может стать primary query, а medium-confidence вариант ищется параллельно с original
+- typo pipeline защищает brand/model/code/size токены и не пытается переисправлять `hp`, `12a`, `a4`, `usb`, `ssd` и похожие артикулы
 - search warmup пишет тайминг и может грузить уже сохранённый индекс вместо полного rebuild
 - backend использует более широкий DB connection pool для снижения `QueuePool timeout` под параллельными запросами
 

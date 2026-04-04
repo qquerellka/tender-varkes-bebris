@@ -44,6 +44,13 @@ export type SearchItem = {
   reasons: string[]
 }
 
+export type SearchQueryVariant = {
+  query: string
+  source: string
+  confidence: string
+  is_primary: boolean
+}
+
 export type SearchResponse = {
   items: SearchItem[]
   meta: {
@@ -51,7 +58,9 @@ export type SearchResponse = {
     query: string
     normalized_query: string
     corrected_query: string | null
+    correction_confidence?: string
     applied_synonyms: string[]
+    query_variants?: SearchQueryVariant[]
     explanations: string[]
     ranking_mode: string
   }
@@ -100,6 +109,8 @@ export type SearchSuggestionsResponse = {
     effective_query: string
     corrected_query: string | null
     correction_type: string
+    correction_confidence?: string
+    query_variants?: SearchQueryVariant[]
   }
 }
 
