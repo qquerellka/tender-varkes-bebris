@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from app.core.config import settings
 from app.domain.catalog.service import CatalogService
 from app.domain.events.schemas import SearchEventRead
@@ -5,13 +7,13 @@ from app.domain.events.service import EventService
 from app.domain.personalization.service import PersonalizationService
 from app.domain.search.normalizer import (
     correct_query,
-    correct_query_fuzzy,
     correct_keyboard_layout,
     expand_fuzzy_term_variants,
     expand_term_variants,
     extract_query_terms,
     lemmatize_query_terms,
     normalize_query,
+    resolve_query_fuzzy_correction,
 )
 from app.domain.search.query_analysis import analyze_search_text
 from app.domain.search.ranking import build_candidate
@@ -23,6 +25,7 @@ from app.domain.search.schemas import (
     SearchDebugQueryRead,
     SearchDebugRankingRead,
     SearchDebugResponse,
+    SearchQueryVariantRead,
     SearchDebugStructuredQueryRead,
     SearchHistoryResponse,
     SearchMeta,
@@ -36,6 +39,34 @@ from app.domain.search.schemas import (
 )
 from app.db.repositories.search import SearchRepository
 from app.integrations.ml.base import RankingProvider, RankingQueryContext, RankingRequest
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedQueryVariant:
+    query: str
+    source: str
+    confidence: str
+    is_primary: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedQuery:
+    normalized_query: str
+    effective_query: str
+    corrected_query: str | None
+    correction_type: str
+    correction_confidence: str
+    variants: tuple[_ResolvedQueryVariant, ...]
+
+    @property
+    def active_queries(self) -> list[str]:
+        return list(
+            dict.fromkeys(
+                variant.query
+                for variant in self.variants
+                if variant.source == "original" or variant.confidence in {"high", "medium"}
+            )
+        )
 
 
 class SearchService:
@@ -261,22 +292,103 @@ class SearchService:
             is_hard_query=structured_query.is_hard_query,
         )
 
-    def _prepare_search_execution(
+    @staticmethod
+    def _serialize_query_variants(
+        variants: tuple[_ResolvedQueryVariant, ...],
+    ) -> list[SearchQueryVariantRead]:
+        return [
+            SearchQueryVariantRead(
+                query=variant.query,
+                source=variant.source,
+                confidence=variant.confidence,
+                is_primary=variant.is_primary,
+            )
+            for variant in variants
+        ]
+
+    @staticmethod
+    def _variant_source_priority(source: str) -> int:
+        priorities = {
+            "spellcheck": 0,
+            "keyboard_layout": 1,
+            "fuzzy_spellcheck": 2,
+            "original": 99,
+        }
+        return priorities.get(source, 50)
+
+    @staticmethod
+    def _variant_confidence_priority(confidence: str) -> int:
+        priorities = {"high": 0, "medium": 1, "low": 2, "none": 3}
+        return priorities.get(confidence, 3)
+
+    def _append_query_variant(
         self,
-        payload: SearchRequest,
-        actor: CurrentActor,
-    ) -> dict:
-        normalized_query, corrected_query, correction_type = self._resolve_query(payload.query)
-        effective_query = corrected_query or normalized_query
+        variants: dict[str, _ResolvedQueryVariant],
+        *,
+        query: str | None,
+        source: str,
+        confidence: str,
+    ) -> None:
+        normalized_query = normalize_query(query or "")
+        if not normalized_query:
+            return
+
+        candidate = _ResolvedQueryVariant(
+            query=normalized_query,
+            source=source,
+            confidence=confidence,
+        )
+        existing = variants.get(normalized_query)
+        if existing is None:
+            variants[normalized_query] = candidate
+            return
+
+        existing_priority = (
+            self._variant_confidence_priority(existing.confidence),
+            self._variant_source_priority(existing.source),
+        )
+        candidate_priority = (
+            self._variant_confidence_priority(candidate.confidence),
+            self._variant_source_priority(candidate.source),
+        )
+        if candidate_priority < existing_priority:
+            variants[normalized_query] = candidate
+
+    @staticmethod
+    def _build_protected_query_terms(*queries: str) -> set[str]:
+        protected_terms: set[str] = set()
+        for query in queries:
+            analysis = analyze_search_text(query)
+            protected_terms.update(analysis.brand_terms)
+            protected_terms.update(analysis.model_terms)
+            protected_terms.update(analysis.code_terms)
+            protected_terms.update(analysis.size_terms)
+            protected_terms.update(analysis.strict_terms)
+        return protected_terms
+
+    def _prepare_query_context(self, query: str) -> dict:
+        resolved_query = self._resolve_query(query)
+        normalized_query = resolved_query.normalized_query
+        effective_query = resolved_query.effective_query
+        active_queries = resolved_query.active_queries
         structured_query = analyze_search_text(effective_query)
+
         original_query_terms = extract_query_terms(normalized_query)
-        query_terms = extract_query_terms(effective_query)
+        query_terms = list(
+            dict.fromkeys(
+                term
+                for value in active_queries
+                for term in extract_query_terms(value)
+            )
+        )
         expanded_query_terms = expand_term_variants(query_terms)
         expanded_original_query_terms = (
             []
             if original_query_terms == query_terms
             else expand_term_variants(original_query_terms)
         )
+        protected_terms = self._build_protected_query_terms(*active_queries)
+
         synonym_lookup_terms = list(
             dict.fromkeys(
                 [
@@ -287,7 +399,9 @@ class SearchService:
                 ]
             )
         )
-        synonym_expansions = self.search_repository.get_synonym_expansions(synonym_lookup_terms)
+        synonym_expansions = self.search_repository.get_synonym_expansions(
+            synonym_lookup_terms
+        )
         applied_synonyms = list(
             dict.fromkeys(item.synonym for item in synonym_expansions if item.synonym)
         )
@@ -309,6 +423,7 @@ class SearchService:
                 [
                     normalized_query,
                     effective_query,
+                    *active_queries,
                     *original_query_terms,
                     *query_terms,
                     *expanded_original_query_terms,
@@ -333,25 +448,52 @@ class SearchService:
                 *expanded_query_terms,
             ],
             blocked_terms=search_terms,
+            protected_terms=protected_terms,
         )
         semantic_query_texts = self._build_semantic_query_texts(
-            effective_query,
-            normalized_query,
+            *active_queries,
             extra_values=applied_synonyms,
         )
         ranking_query_terms = list(
             dict.fromkeys([*expanded_query_terms, *morphology_query_terms, *synonym_terms])
         )
+
+        return {
+            "resolved_query": resolved_query,
+            "normalized_query": normalized_query,
+            "effective_query": effective_query,
+            "corrected_query": resolved_query.corrected_query,
+            "correction_type": resolved_query.correction_type,
+            "correction_confidence": resolved_query.correction_confidence,
+            "query_variants": self._serialize_query_variants(resolved_query.variants),
+            "structured_query": structured_query,
+            "applied_synonyms": applied_synonyms,
+            "synonym_sources": synonym_sources,
+            "synonym_confidence": synonym_confidence,
+            "search_terms": search_terms,
+            "morphology_query_terms": morphology_query_terms,
+            "synonym_query_terms": synonym_query_terms,
+            "fuzzy_search_terms": fuzzy_search_terms,
+            "semantic_query_texts": semantic_query_texts,
+            "ranking_query_terms": ranking_query_terms,
+        }
+
+    def _prepare_search_execution(
+        self,
+        payload: SearchRequest,
+        actor: CurrentActor,
+    ) -> dict:
+        query_context = self._prepare_query_context(payload.query)
         retrieval_only_mode = settings.ranking_mode.strip().lower() == "retrieval_only"
         profile = self._get_profile_for_actor(actor)
 
         items = self.catalog_service.search_ste_candidates(
-            query_terms=search_terms,
-            morphology_query_terms=morphology_query_terms,
-            fuzzy_query_terms=fuzzy_search_terms,
-            synonym_query_terms=synonym_query_terms,
-            semantic_query_texts=semantic_query_texts,
-            structured_query=structured_query,
+            query_terms=query_context["search_terms"],
+            morphology_query_terms=query_context["morphology_query_terms"],
+            fuzzy_query_terms=query_context["fuzzy_search_terms"],
+            synonym_query_terms=query_context["synonym_query_terms"],
+            semantic_query_texts=query_context["semantic_query_texts"],
+            structured_query=query_context["structured_query"],
             strict_match=payload.filters.strict_match,
             category_id=payload.filters.category_id,
             supplier_id=payload.filters.supplier_id,
@@ -360,9 +502,9 @@ class SearchService:
         candidates = [
             build_candidate(
                 item=item,
-                normalized_query=effective_query,
+                normalized_query=query_context["effective_query"],
                 profile=profile,
-                query_terms=ranking_query_terms,
+                query_terms=query_context["ranking_query_terms"],
                 retrieval_score=item.retrieval_score,
                 retrieval_reasons=item.retrieval_reasons,
                 retrieval_channel_scores=item.retrieval_channel_scores,
@@ -380,9 +522,9 @@ class SearchService:
                 RankingRequest(
                     query=RankingQueryContext(
                         original=payload.query,
-                        normalized=normalized_query,
-                        corrected=corrected_query,
-                        applied_synonyms=applied_synonyms,
+                        normalized=query_context["normalized_query"],
+                        corrected=query_context["corrected_query"],
+                        applied_synonyms=query_context["applied_synonyms"],
                     ),
                     actor=actor,
                     profile=profile,
@@ -391,20 +533,7 @@ class SearchService:
             )
 
         return {
-            "normalized_query": normalized_query,
-            "effective_query": effective_query,
-            "corrected_query": corrected_query,
-            "correction_type": correction_type,
-            "structured_query": structured_query,
-            "applied_synonyms": applied_synonyms,
-            "synonym_sources": synonym_sources,
-            "synonym_confidence": synonym_confidence,
-            "search_terms": search_terms,
-            "morphology_query_terms": morphology_query_terms,
-            "synonym_query_terms": synonym_query_terms,
-            "fuzzy_search_terms": fuzzy_search_terms,
-            "semantic_query_texts": semantic_query_texts,
-            "ranking_query_terms": ranking_query_terms,
+            **query_context,
             "profile": profile,
             "candidates": candidates,
             "ranked_items": ranked_items,
@@ -416,12 +545,17 @@ class SearchService:
         *,
         base_terms: list[str],
         blocked_terms: list[str],
+        protected_terms: set[str] | None = None,
     ) -> list[str]:
         if not base_terms:
             return []
 
         search_vocabulary = self.search_repository.get_search_spell_vocabulary()
-        fuzzy_terms = expand_fuzzy_term_variants(base_terms, search_vocabulary)
+        fuzzy_terms = expand_fuzzy_term_variants(
+            base_terms,
+            search_vocabulary,
+            protected_tokens=protected_terms,
+        )
         expanded_fuzzy_terms = expand_term_variants(fuzzy_terms)
         blocked = set(blocked_terms)
 
@@ -449,61 +583,114 @@ class SearchService:
             terms.extend(lemmatize_query_terms(values))
         return list(dict.fromkeys(term for term in terms if term))
 
-    def _resolve_query(self, query: str) -> tuple[str, str | None, str]:
+    def _resolve_query(self, query: str) -> _ResolvedQuery:
         normalized_query = normalize_query(query)
+        if not normalized_query:
+            return _ResolvedQuery(
+                normalized_query="",
+                effective_query="",
+                corrected_query=None,
+                correction_type="none",
+                correction_confidence="none",
+                variants=(),
+            )
+
         search_vocabulary = self.search_repository.get_search_spell_vocabulary()
+        protected_terms = self._build_protected_query_terms(normalized_query)
+        variants_by_query: dict[str, _ResolvedQueryVariant] = {}
+        self._append_query_variant(
+            variants_by_query,
+            query=normalized_query,
+            source="original",
+            confidence="high",
+        )
 
         spell_corrections = self.search_repository.get_spell_corrections(normalized_query)
         spell_corrected_query = correct_query(normalized_query, spell_corrections)
-        fuzzy_corrected_query = (
-            None
-            if spell_corrected_query
-            else correct_query_fuzzy(normalized_query, search_vocabulary)
+        self._append_query_variant(
+            variants_by_query,
+            query=spell_corrected_query,
+            source="spellcheck",
+            confidence="high",
         )
 
         layout_corrected_query = correct_keyboard_layout(normalized_query)
-        layout_spell_corrected_query = None
-        layout_fuzzy_corrected_query = None
-        if layout_corrected_query and not spell_corrected_query and not fuzzy_corrected_query:
-            layout_spell_corrections = self.search_repository.get_spell_corrections(
-                layout_corrected_query
-            )
-            layout_spell_corrected_query = correct_query(
-                layout_corrected_query,
-                layout_spell_corrections,
-            )
-            layout_fuzzy_corrected_query = (
-                layout_spell_corrected_query
-                or correct_query_fuzzy(layout_corrected_query, search_vocabulary)
-            )
-
-        corrected_query = (
-            spell_corrected_query
-            or fuzzy_corrected_query
-            or layout_spell_corrected_query
-            or layout_fuzzy_corrected_query
-            or layout_corrected_query
+        self._append_query_variant(
+            variants_by_query,
+            query=layout_corrected_query,
+            source="keyboard_layout",
+            confidence="high",
         )
 
+        fuzzy_correction = resolve_query_fuzzy_correction(
+            normalized_query,
+            search_vocabulary,
+            protected_tokens=protected_terms,
+        )
+        self._append_query_variant(
+            variants_by_query,
+            query=fuzzy_correction.corrected_query if fuzzy_correction else None,
+            source="fuzzy_spellcheck",
+            confidence=fuzzy_correction.confidence if fuzzy_correction else "none",
+        )
+
+        variants = list(variants_by_query.values())
+        variants.sort(
+            key=lambda variant: (
+                self._variant_confidence_priority(variant.confidence),
+                self._variant_source_priority(variant.source),
+            )
+        )
+
+        primary_variant = next(
+            (
+                variant
+                for variant in variants
+                if variant.source != "original" and variant.confidence == "high"
+            ),
+            next((variant for variant in variants if variant.source == "original"), None),
+        )
+        effective_query = primary_variant.query if primary_variant is not None else normalized_query
+        corrected_query = (
+            effective_query if primary_variant and primary_variant.source != "original" else None
+        )
         correction_type = (
-            "spellcheck"
-            if spell_corrected_query
-            else "fuzzy_spellcheck"
-            if fuzzy_corrected_query
-            else "keyboard_layout_spellcheck"
-            if layout_spell_corrected_query or layout_fuzzy_corrected_query
-            else "keyboard_layout"
-            if layout_corrected_query
+            primary_variant.source
+            if primary_variant and primary_variant.source != "original"
+            else "none"
+        )
+        correction_confidence = (
+            primary_variant.confidence
+            if primary_variant and primary_variant.source != "original"
             else "none"
         )
 
-        return normalized_query, corrected_query, correction_type
+        serialized_variants: list[_ResolvedQueryVariant] = []
+        for variant in variants:
+            serialized_variants.append(
+                _ResolvedQueryVariant(
+                    query=variant.query,
+                    source=variant.source,
+                    confidence=variant.confidence,
+                    is_primary=variant.query == effective_query,
+                )
+            )
+
+        return _ResolvedQuery(
+            normalized_query=normalized_query,
+            effective_query=effective_query,
+            corrected_query=corrected_query,
+            correction_type=correction_type,
+            correction_confidence=correction_confidence,
+            variants=tuple(serialized_variants),
+        )
 
     @staticmethod
     def _build_explanations(
         *,
         corrected_query: str | None,
         normalized_query: str,
+        query_variants: list[SearchQueryVariantRead],
         applied_synonyms: list[str],
         profile,
     ) -> list[str]:
@@ -513,6 +700,16 @@ class SearchService:
             explanations.append(
                 f'Запрос скорректирован до "{corrected_query}" для более точного поиска'
             )
+        else:
+            medium_variants = [
+                item.query
+                for item in query_variants
+                if item.source != "original" and item.confidence == "medium"
+            ]
+            if medium_variants:
+                explanations.append(
+                    f'Добавлен альтернативный вариант запроса "{medium_variants[0]}" для подстраховки по опечаткам'
+                )
 
         if applied_synonyms:
             explanations.append(
@@ -553,6 +750,16 @@ class SearchService:
                 "normalized_query": prepared["effective_query"],
                 "corrected_query": prepared["corrected_query"] or "",
                 "correction_type": prepared["correction_type"],
+                "correction_confidence": prepared["correction_confidence"],
+                "query_variants": [
+                    {
+                        "query": item.query,
+                        "source": item.source,
+                        "confidence": item.confidence,
+                        "is_primary": item.is_primary,
+                    }
+                    for item in prepared["query_variants"]
+                ],
                 "synonyms_count": len(prepared["applied_synonyms"]),
             },
         )
@@ -564,12 +771,15 @@ class SearchService:
                 query=payload.query,
                 normalized_query=prepared["normalized_query"],
                 corrected_query=prepared["corrected_query"],
+                correction_confidence=prepared["correction_confidence"],
                 applied_synonyms=prepared["applied_synonyms"],
                 synonym_sources=prepared["synonym_sources"],
                 synonym_confidence=prepared["synonym_confidence"],
+                query_variants=prepared["query_variants"],
                 explanations=self._build_explanations(
                     corrected_query=prepared["corrected_query"],
                     normalized_query=prepared["normalized_query"],
+                    query_variants=prepared["query_variants"],
                     applied_synonyms=prepared["applied_synonyms"],
                     profile=prepared["profile"],
                 ),
@@ -582,9 +792,11 @@ class SearchService:
         query: str,
         actor: CurrentActor,
     ) -> SearchSuggestionsResponse:
-        normalized_query, corrected_query, correction_type = self._resolve_query(query)
-        effective_query = corrected_query or normalized_query
-        structured_query = analyze_search_text(effective_query)
+        query_context = self._prepare_query_context(query)
+        normalized_query = query_context["normalized_query"]
+        corrected_query = query_context["corrected_query"]
+        effective_query = query_context["effective_query"]
+        structured_query = query_context["structured_query"]
         profile = self._get_profile_for_actor(actor)
 
         suggestions: list[SearchSuggestion] = []
@@ -616,81 +828,12 @@ class SearchService:
                 ][:3]
             )
 
-            original_product_terms = extract_query_terms(normalized_query)
-            product_terms = extract_query_terms(effective_query)
-            expanded_original_product_terms = (
-                []
-                if original_product_terms == product_terms
-                else expand_term_variants(original_product_terms)
-            )
-            expanded_product_terms = expand_term_variants(product_terms)
-            product_synonym_lookup_terms = list(
-                dict.fromkeys(
-                    [
-                        *original_product_terms,
-                        *product_terms,
-                        *expanded_original_product_terms,
-                        *expanded_product_terms,
-                    ]
-                )
-            )
-            product_synonym_expansions = self.search_repository.get_synonym_expansions(
-                product_synonym_lookup_terms
-            )
-            product_applied_synonyms = list(
-                dict.fromkeys(
-                    item.synonym for item in product_synonym_expansions if item.synonym
-                )
-            )
-            product_synonym_terms: list[str] = []
-            for synonym in product_applied_synonyms:
-                product_synonym_terms.extend(
-                    expand_term_variants(extract_query_terms(synonym))
-                )
-            morphology_product_terms = self._build_morphology_terms(
-                original_product_terms,
-                product_terms,
-                expanded_original_product_terms,
-                expanded_product_terms,
-                structured_query.category_hints,
-                structured_query.attribute_terms,
-            )
-            fuzzy_product_terms = self._build_fuzzy_retrieval_terms(
-                base_terms=[
-                    *original_product_terms,
-                    *product_terms,
-                    *expanded_original_product_terms,
-                    *expanded_product_terms,
-                ],
-                blocked_terms=[
-                    normalized_query,
-                    effective_query,
-                    *original_product_terms,
-                    *product_terms,
-                    *expanded_original_product_terms,
-                    *expanded_product_terms,
-                ],
-            )
             product_candidates = self.catalog_service.search_ste_items(
-                query_terms=[
-                    normalized_query,
-                    effective_query,
-                    *original_product_terms,
-                    *product_terms,
-                    *expanded_original_product_terms,
-                    *expanded_product_terms,
-                ],
-                morphology_query_terms=morphology_product_terms,
-                fuzzy_query_terms=fuzzy_product_terms,
-                synonym_query_terms=[
-                    *product_applied_synonyms,
-                    *product_synonym_terms,
-                ],
-                semantic_query_texts=self._build_semantic_query_texts(
-                    effective_query,
-                    normalized_query,
-                    extra_values=product_applied_synonyms,
-                ),
+                query_terms=query_context["search_terms"],
+                morphology_query_terms=query_context["morphology_query_terms"],
+                fuzzy_query_terms=query_context["fuzzy_search_terms"],
+                synonym_query_terms=query_context["synonym_query_terms"],
+                semantic_query_texts=query_context["semantic_query_texts"],
                 structured_query=structured_query,
                 strict_match=False,
             )
@@ -735,16 +878,21 @@ class SearchService:
                 normalized_query=normalized_query,
                 effective_query=effective_query,
                 corrected_query=corrected_query,
-                correction_type=correction_type,
+                correction_type=query_context["correction_type"],
+                correction_confidence=query_context["correction_confidence"],
+                query_variants=query_context["query_variants"],
             ),
         )
 
     def get_spellcheck(self, query: str) -> SpellcheckResponse:
-        normalized_query, corrected_query, _ = self._resolve_query(query)
+        resolved_query = self._resolve_query(query)
         self._release_read_connection()
         return SpellcheckResponse(
             original_query=query,
-            corrected_query=corrected_query or correct_keyboard_layout(normalized_query),
+            corrected_query=resolved_query.corrected_query,
+            correction_type=resolved_query.correction_type,
+            correction_confidence=resolved_query.correction_confidence,
+            query_variants=self._serialize_query_variants(resolved_query.variants),
         )
 
     def get_history(
@@ -829,10 +977,12 @@ class SearchService:
                 effective=prepared["effective_query"],
                 corrected=prepared["corrected_query"],
                 correction_type=prepared["correction_type"],
+                correction_confidence=prepared["correction_confidence"],
                 filters=payload.filters,
                 applied_synonyms=prepared["applied_synonyms"],
                 synonym_sources=prepared["synonym_sources"],
                 synonym_confidence=prepared["synonym_confidence"],
+                query_variants=prepared["query_variants"],
                 search_terms=prepared["search_terms"],
                 morphology_terms=prepared["morphology_query_terms"],
                 synonym_terms=prepared["synonym_query_terms"],

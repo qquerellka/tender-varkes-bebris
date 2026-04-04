@@ -79,6 +79,8 @@ DATABASE_POOL_RECYCLE=1800
 - demo-профили и справочники категорий/поставщиков кэшируются в процессе
 - retrieval использует two-stage pipeline: cheap candidate generation -> shortlist -> expensive exact/attribute/fuzzy
 - typo correction использует индексированный spell vocabulary вместо полного перебора словаря на каждый запрос
+- search service хранит `query_variants` с confidence и не форсирует medium-confidence correction как единственный запрос
+- protected typo tokens не переисправляются: brand/model/code/size термы вроде `hp`, `12a`, `a4`, `usb`, `ssd` остаются как есть
 
 ## Локальный запуск
 

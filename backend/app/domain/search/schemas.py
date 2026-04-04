@@ -45,14 +45,23 @@ class CandidateItem(BaseModel):
     retrieval_features: dict[str, float] = Field(default_factory=dict, exclude=True)
 
 
+class SearchQueryVariantRead(BaseModel):
+    query: str
+    source: str
+    confidence: str
+    is_primary: bool = False
+
+
 class SearchMeta(BaseModel):
     session_id: str | None = None
     query: str
     normalized_query: str
     corrected_query: str | None = None
+    correction_confidence: str = "none"
     applied_synonyms: list[str] = Field(default_factory=list)
     synonym_sources: dict[str, str] = Field(default_factory=dict)
     synonym_confidence: dict[str, float] = Field(default_factory=dict)
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
     explanations: list[str] = Field(default_factory=list)
     ranking_mode: str
 
@@ -75,6 +84,8 @@ class SearchSuggestionsMeta(BaseModel):
     effective_query: str
     corrected_query: str | None = None
     correction_type: str = "none"
+    correction_confidence: str = "none"
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
 
 
 class SearchSuggestionsResponse(BaseModel):
@@ -135,10 +146,12 @@ class SearchDebugQueryRead(BaseModel):
     effective: str
     corrected: str | None = None
     correction_type: str = "none"
+    correction_confidence: str = "none"
     filters: SearchFilters = Field(default_factory=SearchFilters)
     applied_synonyms: list[str] = Field(default_factory=list)
     synonym_sources: dict[str, str] = Field(default_factory=dict)
     synonym_confidence: dict[str, float] = Field(default_factory=dict)
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
     search_terms: list[str] = Field(default_factory=list)
     morphology_terms: list[str] = Field(default_factory=list)
     synonym_terms: list[str] = Field(default_factory=list)
@@ -191,6 +204,9 @@ class SearchDebugResponse(BaseModel):
 class SpellcheckResponse(BaseModel):
     original_query: str
     corrected_query: str | None = None
+    correction_type: str = "none"
+    correction_confidence: str = "none"
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
 
 
 class SearchStackStatusRead(BaseModel):
