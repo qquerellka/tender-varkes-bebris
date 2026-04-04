@@ -34,6 +34,8 @@ SEARCH_INDEX_CACHE_PATH=/app/.cache/search/hybrid_search_index.pkl
 - выдача строится только по retrieval score, без ML rerank
 - semantic warmup не тратит время и память
 - индекс сохраняется на диск и не пересчитывается полностью на каждом рестарте
+- startup строит документы для индекса потоково из SQL, без materialize всего каталога в ORM-объекты
+- после построения индекса runtime освобождает build-only token/lemma state, чтобы уменьшить потребление памяти
 
 ## Импорт каталога и warmup
 
@@ -57,6 +59,16 @@ Warmup search stack теперь:
 - логирует длительность `search_warmup` и `ranking_warmup`
 - использует persisted search index cache
 - строит retrieval index один раз и загружает его на следующих стартах
+- читает каталог для warmup батчами через `yield_per`, что уменьшает peak RAM на больших импортированных выборках
+- хранит только runtime-нужные структуры индекса после завершения build phase
+
+Если backend не поднимается из-за памяти, сначала запусти Docker с ограниченными лимитами импорта и без semantic:
+
+```env
+PORTAL_IMPORT_STE_LIMIT=100000
+PORTAL_IMPORT_CONTRACT_LIMIT=100000
+SEARCH_SEMANTIC_BACKEND=disabled
+```
 
 Проверка состояния:
 

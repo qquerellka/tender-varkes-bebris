@@ -134,6 +134,16 @@ class HybridRetrievalTests(unittest.TestCase):
         self.assertIn("retrieval_rrf", results[0].reasons)
         self.assertEqual(results[0].features["appeared_in_multiple_channels"], 1.0)
 
+    def test_build_time_state_is_released_after_index_construction(self) -> None:
+        document = self.index.documents[0]
+
+        self.assertIsNone(document.field_terms)
+        self.assertIsNone(document.field_lemma_terms)
+        self.assertIsNone(document.analysis_by_field)
+        self.assertEqual(set(document.field_texts), {"title", "attributes", "description"})
+        self.assertEqual(set(document.field_term_sets), {"title", "category", "attributes"})
+        self.assertEqual(set(document.field_lemma_sets), {"title", "category"})
+
     @patch("app.domain.search.retrieval.build_faiss_index", return_value=None)
     @patch(
         "app.domain.search.retrieval.encode_bge_m3_texts",

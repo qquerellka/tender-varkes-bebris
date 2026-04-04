@@ -47,6 +47,9 @@ FIELD_INDEX_TEXT_LIMITS = {
     "description": 4096,
     "supplier": 256,
 }
+RUNTIME_FIELD_TEXT_NAMES = ("title", "attributes", "description")
+RUNTIME_FIELD_TERM_SET_NAMES = ("title", "category", "attributes")
+RUNTIME_FIELD_LEMMA_SET_NAMES = ("title", "category")
 RETRIEVAL_MIN_CANDIDATE_POOL = 300
 RETRIEVAL_MAX_CANDIDATE_POOL = 1200
 FIELD_WEIGHTS = {
@@ -118,11 +121,11 @@ class _ChannelHit:
 class _IndexedDocument:
     payload: SearchDocument
     field_texts: dict[str, str]
-    field_terms: dict[str, list[str]]
+    field_terms: dict[str, list[str]] | None
     field_term_sets: dict[str, frozenset[str]]
-    field_lemma_terms: dict[str, list[str]]
+    field_lemma_terms: dict[str, list[str]] | None
     field_lemma_sets: dict[str, frozenset[str]]
-    analysis_by_field: dict[str, SearchTextAnalysis]
+    analysis_by_field: dict[str, SearchTextAnalysis] | None
     combined_analysis: SearchTextAnalysis
     title_trigrams: frozenset[str]
     text_trigrams: frozenset[str]
@@ -138,13 +141,18 @@ class HybridSearchIndex:
         progress: bool = False,
     ) -> None:
         started_at = time.perf_counter()
-        source_documents = list(documents)
         indexed_documents: list[_IndexedDocument] = []
-        total_documents = len(source_documents)
-        for index, document in enumerate(source_documents, start=1):
+        try:
+            total_documents: int | None = len(documents)  # type: ignore[arg-type]
+        except TypeError:
+            total_documents = None
+
+        for index, document in enumerate(documents, start=1):
             indexed_documents.append(self._index_document(document))
             if progress and (
-                index == 1 or index % 1000 == 0 or index == total_documents
+                index == 1
+                or index % 1000 == 0
+                or (total_documents is not None and index == total_documents)
             ):
                 self._emit_progress(
                     "index-documents",
@@ -192,6 +200,7 @@ class HybridSearchIndex:
         self._semantic_matrix = np.zeros((len(indexed_documents), 0), dtype=float)
         if self._semantic_enabled:
             self._build_semantic_index()
+        self._release_build_only_state()
 
         if progress:
             elapsed = time.perf_counter() - started_at
@@ -506,11 +515,14 @@ class HybridSearchIndex:
         for field_index, field_name in enumerate(FIELD_NAMES, start=1):
             document_frequencies: Counter[str] = Counter()
             for position, document in enumerate(self.documents):
-                tokens = (
-                    document.field_lemma_terms[field_name]
+                term_map = (
+                    document.field_lemma_terms
                     if use_lemmas
-                    else document.field_terms[field_name]
+                    else document.field_terms
                 )
+                if term_map is None:
+                    raise RuntimeError("Build-time token state is not available for BM25 indexing")
+                tokens = term_map[field_name]
                 term_counts = Counter(tokens)
                 doc_lengths[field_name][position] = float(sum(term_counts.values()))
                 for token, term_frequency in term_counts.items():
@@ -545,12 +557,26 @@ class HybridSearchIndex:
         stage: str,
         *,
         index: int,
-        total: int,
+        total: int | None,
         started_at: float,
     ) -> None:
         elapsed = time.perf_counter() - started_at
         rate = index / elapsed if elapsed > 0 else 0.0
-        remaining = ((total - index) / rate) if rate > 0 else 0.0
+        remaining = (
+            ((total - index) / rate)
+            if rate > 0 and total is not None
+            else 0.0
+        )
+        if total is None:
+            print(
+                "[retrieval-index] "
+                f"{stage} "
+                f"count={index} "
+                f"elapsed={_format_progress_seconds(elapsed)}",
+                flush=True,
+            )
+            return
+
         print(
             "[retrieval-index] "
             f"{stage} "
@@ -573,6 +599,24 @@ class HybridSearchIndex:
             return
 
         self._build_fallback_semantic_index(semantic_corpus)
+
+    def _release_build_only_state(self) -> None:
+        for document in self.documents:
+            document.field_texts = {
+                field_name: document.field_texts.get(field_name, "")
+                for field_name in RUNTIME_FIELD_TEXT_NAMES
+            }
+            document.field_term_sets = {
+                field_name: document.field_term_sets.get(field_name, frozenset())
+                for field_name in RUNTIME_FIELD_TERM_SET_NAMES
+            }
+            document.field_lemma_sets = {
+                field_name: document.field_lemma_sets.get(field_name, frozenset())
+                for field_name in RUNTIME_FIELD_LEMMA_SET_NAMES
+            }
+            document.field_terms = None
+            document.field_lemma_terms = None
+            document.analysis_by_field = None
 
     @staticmethod
     def _build_semantic_document_text(document: _IndexedDocument) -> str:

@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 from sqlalchemy import Text, cast, func, select
 from sqlalchemy.orm import Session, joinedload
@@ -250,7 +251,7 @@ class SearchRepository:
                 self.__class__._search_spell_vocabulary_cache = spell_vocabulary
                 return persisted_cache
 
-            documents = self._build_search_documents()
+            documents = self._iter_search_documents()
             cache = HybridSearchIndex(
                 documents,
                 enable_semantic=settings.search_semantic_backend.strip().lower() != "disabled",
@@ -264,27 +265,42 @@ class SearchRepository:
             self._save_persisted_hybrid_index(signature, cache)
             return cache
 
-    def _build_search_documents(self) -> list[SearchDocument]:
+    def _iter_search_documents(self) -> Iterator[SearchDocument]:
         stmt = (
-            select(STEItemModel)
-            .options(joinedload(STEItemModel.category), joinedload(STEItemModel.supplier))
-            .order_by(STEItemModel.updated_at.desc(), STEItemModel.title.asc())
-        )
-        return [
-            SearchDocument(
-                id=item.id,
-                title=item.title,
-                description=item.description,
-                category_id=item.category_id,
-                category_name=item.category.name if item.category else "",
-                supplier_id=item.supplier_id,
-                supplier_name=item.supplier.name if item.supplier else "",
-                attributes=item.attributes_json,
-                status=item.status,
-                updated_at=item.updated_at,
+            select(
+                STEItemModel.id.label("item_id"),
+                STEItemModel.title.label("title"),
+                STEItemModel.description.label("description"),
+                STEItemModel.category_id.label("category_id"),
+                CategoryModel.name.label("category_name"),
+                STEItemModel.supplier_id.label("supplier_id"),
+                SupplierModel.name.label("supplier_name"),
+                STEItemModel.attributes_json.label("attributes_json"),
+                STEItemModel.status.label("status"),
+                STEItemModel.updated_at.label("updated_at"),
             )
-            for item in self.session.scalars(stmt)
-        ]
+            .join(CategoryModel, STEItemModel.category_id == CategoryModel.id)
+            .join(SupplierModel, STEItemModel.supplier_id == SupplierModel.id)
+            .order_by(STEItemModel.updated_at.desc(), STEItemModel.title.asc())
+            .execution_options(yield_per=500)
+        )
+        for row in self.session.execute(stmt).mappings():
+            attributes = row["attributes_json"]
+            if not isinstance(attributes, dict):
+                attributes = {}
+
+            yield SearchDocument(
+                id=str(row["item_id"]),
+                title=str(row["title"] or ""),
+                description=str(row["description"] or ""),
+                category_id=str(row["category_id"] or ""),
+                category_name=str(row["category_name"] or ""),
+                supplier_id=str(row["supplier_id"] or ""),
+                supplier_name=str(row["supplier_name"] or ""),
+                attributes={str(key): str(value) for key, value in attributes.items()},
+                status=str(row["status"] or "active"),
+                updated_at=row["updated_at"],
+            )
 
     def _build_search_vocabulary(self, index: HybridSearchIndex) -> set[str]:
         return set(self._build_search_spell_vocabulary(index).tokens)
