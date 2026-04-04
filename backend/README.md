@@ -15,6 +15,7 @@ FastAPI backend для каталога, поиска и baseline/ML-ранжи�
 ## Документы
 
 - `ARCHITECTURE.md` - структура backend
+- `ENTITY_REFERENCE.md` - сущности backend, их поля и значения
 - `ML_HANDOFF.md` - контракт backend <-> ML
 - `TELEMETRY_SPEC.md` - event-модель и search signals
 - `TELEMETRY_EVENT_DICTIONARY.md` - словарь raw events и payload

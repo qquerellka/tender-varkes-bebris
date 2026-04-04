@@ -1,10 +1,7 @@
 import {
   AppstoreOutlined,
-  BellOutlined,
-  BulbOutlined,
   HeartFilled,
   HeartOutlined,
-  MenuOutlined,
   SearchOutlined,
   ShoppingCartOutlined,
   StarOutlined,
@@ -29,7 +26,6 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
 import {
   activityFilterOptions,
-  getActivityColor,
   getActivityFilterKey,
   type ActivityFilter,
 } from '@entities/search/lib/activity'
@@ -80,6 +76,49 @@ import {
   writeLastSearchSessionId,
   writeStoredSession,
 } from '@shared/lib/portal-session'
+import {
+  ActivityCard,
+  ActivityMeta,
+  ActivityText,
+  ActivityTimeline,
+  ActivityTitle,
+  ActivityTop,
+  HintSurface,
+  HintText,
+  EmptyStateBlock,
+  EmptyStateText,
+  HeroActionRow,
+  HeroEyebrow,
+  HeroIntroBlock,
+  HeroText,
+  HeroTitle,
+  InlineActionRow,
+  MetricCard,
+  MetricGrid,
+  MetricLabel,
+  MetricValue,
+  OnboardingCard,
+  OnboardingCardAction,
+  OnboardingCardText,
+  OnboardingCardTitle,
+  OnboardingGrid,
+  OnboardingHeader,
+  OnboardingSurface,
+  OnboardingText,
+  OnboardingTitle,
+  SectionHeaderBar,
+  SectionHeading,
+  SectionHeadingHint,
+  SectionHeadingStack,
+  SectionSurface,
+  StatusPill,
+  SurfaceButton,
+  SnapshotCard,
+  SnapshotGrid,
+  SnapshotHint,
+  SnapshotLabel,
+  SnapshotValue,
+} from '@shared/ui/dashboard-surfaces'
 import PortalShell from '@widgets/portal-shell/PortalShell'
 
 const STORAGE_KEYS = {
@@ -129,6 +168,26 @@ function formatPurchasePrice(value: string) {
     currency: 'RUB',
     maximumFractionDigits: 0,
   }).format(numericValue)
+}
+
+function getActivityPillTone(eventType: string): 'accent' | 'success' | 'warning' | 'danger' | 'purple' | 'info' {
+  const normalized = eventType.toLowerCase()
+  if (normalized.includes('purchase')) {
+    return 'success'
+  }
+  if (normalized.includes('cart')) {
+    return 'warning'
+  }
+  if (normalized.includes('favorite') || normalized.includes('comparison')) {
+    return 'purple'
+  }
+  if (normalized.includes('irrelevant')) {
+    return 'danger'
+  }
+  if (normalized.includes('result') || normalized.includes('search')) {
+    return 'accent'
+  }
+  return 'info'
 }
 
 function formatPurchaseDate(value: string) {
@@ -478,6 +537,16 @@ const SearchStrip = styled.section`
   box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
 `
 
+const SearchHeroTop = styled.div`
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 18px;
+
+  @media (max-width: 1080px) {
+    grid-template-columns: 1fr;
+  }
+`
+
 const SearchRow = styled.div`
   display: grid;
   grid-template-columns: 160px minmax(0, 1fr) 160px;
@@ -550,150 +619,10 @@ const SearchMetaRow = styled.div`
   flex-wrap: wrap;
 `
 
-const OnboardingStrip = styled.section`
-  display: grid;
-  gap: 16px;
-  margin-top: 18px;
-  padding: 18px 20px;
-  border: 1px solid #d9e0e8;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(244, 248, 253, 0.98) 100%);
-  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
-`
-
-const OnboardingHeader = styled.div`
-  display: grid;
-  gap: 6px;
-`
-
-const OnboardingTitle = styled.span`
-  color: #2a3c56;
-  font-size: 20px;
-  font-weight: 800;
-`
-
-const OnboardingText = styled.span`
-  color: #5f7085;
-  font-size: 14px;
-  line-height: 1.5;
-`
-
-const OnboardingGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-
-  @media (max-width: 1100px) {
-    grid-template-columns: 1fr;
-  }
-`
-
-const OnboardingCard = styled.button`
-  display: grid;
-  gap: 8px;
-  padding: 16px;
-  border: 1px solid #dbe4ed;
-  color: #273a53;
-  font: inherit;
-  text-align: left;
-  background: #fff;
-  cursor: pointer;
-
-  &:hover {
-    border-color: #2f4f84;
-    background: #f7fbff;
-  }
-`
-
-const OnboardingCardTitle = styled.span`
-  color: #2b4365;
-  font-size: 15px;
-  font-weight: 800;
-`
-
-const OnboardingCardText = styled.span`
-  color: #66778c;
-  font-size: 13px;
-  line-height: 1.45;
-`
-
-const OnboardingCardAction = styled.span`
-  color: #2f4f84;
-  font-size: 13px;
-  font-weight: 800;
-  text-transform: uppercase;
-`
-
-const CollectionEmptyState = styled.div`
-  display: grid;
-  gap: 14px;
-  justify-items: start;
-`
-
-const CollectionEmptyText = styled.span`
-  color: #64748a;
-  font-size: 14px;
-  line-height: 1.5;
-`
-
 const CollectionActionRow = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-`
-
-const HintPanel = styled.div`
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid #dde6ef;
-  background: #fbfcfe;
-`
-
-const HintText = styled.span`
-  color: #64748a;
-  font-size: 14px;
-  line-height: 1.5;
-`
-
-const ActivityTimeline = styled.div`
-  display: grid;
-  gap: 12px;
-`
-
-const ActivityCard = styled.div`
-  display: grid;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid #dde6ef;
-  background: #fbfcfe;
-`
-
-const ActivityTop = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-`
-
-const ActivityMeta = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-`
-
-const ActivityTitle = styled.span`
-  color: #2b3f5d;
-  font-size: 14px;
-  font-weight: 700;
-`
-
-const ActivityText = styled.span`
-  color: #64748a;
-  font-size: 13px;
-  line-height: 1.5;
 `
 
 const SearchMetaGroup = styled.div`
@@ -817,41 +746,9 @@ const PurchaseMeta = styled.span`
   line-height: 1.45;
 `
 
-const SummaryGrid = styled.div`
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-`
-
-const SummaryStat = styled.div`
-  display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid #e2e8ef;
-  background: #fbfcfd;
-`
-
-const SummaryValue = styled.span`
-  color: #24364f;
-  font-size: 20px;
-  font-weight: 800;
-`
-
-const SummaryLabel = styled.span`
-  color: #728196;
-  font-size: 12px;
-  line-height: 1.4;
-`
-
 const Content = styled.section`
   display: grid;
   gap: 18px;
-`
-
-const SectionCard = styled.section`
-  border: 1px solid #d9e0e8;
-  background: #fff;
-  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
 `
 
 const TabsRow = styled.div`
@@ -870,30 +767,6 @@ const TabButton = styled.button<{ $active: boolean }>`
   font-weight: 700;
   background: ${({ $active }) => ($active ? '#f5f9ff' : '#fff')};
   cursor: pointer;
-`
-
-const ContentHeader = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 18px 20px;
-  border-bottom: 1px solid #e1e7ee;
-`
-
-const ContentTitle = styled(Typography.Title)`
-  && {
-    margin: 0;
-    color: #314158;
-    font-size: 18px;
-    font-weight: 700;
-  }
-`
-
-const ContentHint = styled(Typography.Text)`
-  color: #6a798c;
-  font-size: 13px;
 `
 
 const ResultGrid = styled.div`
@@ -917,6 +790,7 @@ const ProductCard = styled.article`
   min-height: 520px;
   border: 1px solid #d9e1ea;
   background: #fff;
+  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
   transition:
     transform 0.18s ease,
     box-shadow 0.18s ease,
@@ -1002,18 +876,39 @@ const ProductVisualLabel = styled.span`
 
 const ProductBody = styled.div`
   display: grid;
-  gap: 10px;
+  gap: 12px;
   padding: 18px 20px 14px;
 `
 
 const ProductTechMeta = styled.div`
   display: grid;
-  gap: 4px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
 `
 
 const ProductTechLine = styled.div`
-  color: #6b7c91;
-  font-size: 12px;
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #e4ebf2;
+  background: #fbfcfe;
+`
+
+const ProductTechLabel = styled.span`
+  color: #7c8a9b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+`
+
+const ProductTechValue = styled.span`
+  color: #31455f;
+  font-size: 13px;
   line-height: 1.45;
 `
 
@@ -1032,15 +927,88 @@ const ProductTitle = styled.button`
 
 const ProductMeta = styled.div`
   display: grid;
-  gap: 5px;
+  gap: 10px;
   color: #4f5f74;
   font-size: 14px;
   line-height: 1.45;
 `
 
-const MetaLabel = styled.span`
-  color: #24364f;
+const ProductContextRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+`
+
+const ProductContextChip = styled.span<{ $tone?: 'neutral' | 'accent' | 'success' | 'warning' }>`
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border: 1px solid
+    ${({ $tone = 'neutral' }) =>
+      $tone === 'accent'
+        ? '#cfdcf0'
+        : $tone === 'success'
+        ? '#cfe6da'
+        : $tone === 'warning'
+        ? '#eadac0'
+        : '#dde5ee'};
+  color: ${({ $tone = 'neutral' }) =>
+    $tone === 'accent'
+      ? '#2f4f84'
+      : $tone === 'success'
+      ? '#226246'
+      : $tone === 'warning'
+      ? '#7a5a1d'
+      : '#5e6f84'};
+  font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: ${({ $tone = 'neutral' }) =>
+    $tone === 'accent'
+      ? '#f3f7fd'
+      : $tone === 'success'
+      ? '#eef8f2'
+      : $tone === 'warning'
+      ? '#fff8ea'
+      : '#f8fbfe'};
+`
+
+const ProductReasonPanel = styled.div`
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid #dce5ee;
+  background: linear-gradient(180deg, #fbfcfe 0%, #ffffff 100%);
+`
+
+const ProductReasonHeader = styled.div`
+  color: #405672;
+  font-size: 12px;
+  font-weight: 700;
+`
+
+const ProductReasonList = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+`
+
+const ProductReasonChip = styled.span`
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-left: 3px solid #2f4f84;
+  color: #596a7f;
+  font-size: 12px;
+  line-height: 1.35;
+  background: #f6f9fd;
+`
+
+const ProductReasonText = styled.span`
+  color: #63758a;
+  font-size: 13px;
+  line-height: 1.5;
 `
 
 const ProductFooter = styled.div`
@@ -1103,12 +1071,22 @@ const CompareTable = styled.div`
 `
 
 const CompareLead = styled.div`
-  padding: 16px 18px;
+  display: grid;
+  gap: 6px;
+  padding: 18px 20px;
   border: 1px solid #dbe3ec;
   color: #607085;
-  background: #fbfcfe;
+  background:
+    radial-gradient(circle at top right, rgba(47, 79, 132, 0.08), transparent 28%),
+    linear-gradient(180deg, #fbfcfe 0%, #ffffff 100%);
   font-size: 13px;
   line-height: 1.55;
+`
+
+const CompareLeadTitle = styled.span`
+  color: #30415a;
+  font-size: 15px;
+  font-weight: 700;
 `
 
 const CompareCards = styled.div`
@@ -1127,17 +1105,36 @@ const CompareCards = styled.div`
 
 const CompareSubjectCard = styled.section`
   display: grid;
+  grid-template-rows: auto auto 1fr auto;
   gap: 12px;
-  min-height: 240px;
+  min-height: 380px;
   padding: 16px;
   border: 1px solid #dbe3ec;
   background: #fff;
+  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
+`
+
+const CompareSubjectTop = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+`
+
+const CompareSubjectStamp = styled(ProductStamp)`
+  width: fit-content;
+`
+
+const CompareSubjectSignalRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 `
 
 const CompareSubjectVisual = styled.div<{ $from: string; $to: string }>`
   display: grid;
   place-items: center;
-  min-height: 124px;
+  min-height: 150px;
   border: 1px solid #edf2f7;
   background:
     radial-gradient(circle at 50% 22%, rgba(255, 255, 255, 0.88), transparent 28%),
@@ -1153,10 +1150,38 @@ const CompareSubjectTitle = styled.div`
 
 const CompareSubjectMeta = styled.div`
   display: grid;
-  gap: 4px;
+  gap: 8px;
   color: #66778b;
   font-size: 12px;
   line-height: 1.45;
+`
+
+const CompareMetaCard = styled.div`
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #e4ebf2;
+  background: #fbfcfe;
+`
+
+const CompareMetaLabel = styled.span`
+  color: #7c8a9b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+`
+
+const CompareMetaValue = styled.span`
+  color: #31455f;
+  font-size: 13px;
+  line-height: 1.45;
+`
+
+const CompareSubjectFooter = styled.div`
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
 `
 
 const CompareGrid = styled.div`
@@ -1175,7 +1200,12 @@ const CompareCell = styled.div<{ $header?: boolean; $emphasis?: boolean }>`
   color: ${({ $header }) => ($header ? '#30415a' : '#55667b')};
   font-size: 13px;
   font-weight: ${({ $header }) => ($header ? 700 : 400)};
-  background: ${({ $header, $emphasis }) => ($header ? '#f7f9fc' : $emphasis ? '#fff8eb' : '#fff')};
+  background: ${({ $header, $emphasis }) =>
+    $header
+      ? 'linear-gradient(180deg, #f7f9fc 0%, #fdfefe 100%)'
+      : $emphasis
+      ? '#fff8eb'
+      : '#fff'};
 `
 
 const CompareCellLabel = styled.div`
@@ -1599,6 +1629,23 @@ function Workspace({
       ),
     [activityFilter, activityQuery.data?.items],
   )
+  const entryMode = session.entry_mode ?? (session.has_history ? 'history' : 'empty')
+  const entryModeLabel =
+    entryMode === 'history' ? 'С историей' : entryMode === 'context' ? 'С контекстом' : 'Пустой кабинет'
+  const currentScenarioTitle =
+    searchState.kind === 'results'
+      ? searchState.response.meta.query
+      : historyQuery.data?.items?.[0]?.query ?? starterScenarios[0]?.title ?? 'Новый сценарий'
+  const currentScenarioHint =
+    searchState.kind === 'results'
+      ? 'Сейчас в фокусе активная поисковая выдача.'
+      : historyQuery.data?.items?.[0]?.query
+      ? 'Можно быстро вернуться к последнему рабочему запросу.'
+      : 'Для старта используйте сценарии ниже или выполните первый поиск.'
+  const profileSignalCount =
+    (profileQuery.data?.active_signals.length ?? 0) +
+    (profileQuery.data?.top_categories.length ?? 0) +
+    (profileQuery.data?.popular_queries.length ?? 0)
 
   function markSessionInteraction(sessionId: string | null) {
     if (!sessionId) {
@@ -1837,6 +1884,17 @@ function Workspace({
     void applyStarterScenario(scenario)
   }
 
+  function openActivitySearch(query: string) {
+    setActiveTab('catalog')
+    setCatalogPage(1)
+    setSearchValue(query)
+    void runSearch(query)
+  }
+
+  function openActivityProduct(steId: string) {
+    navigate(buildProductPath(steId, currentSessionId))
+  }
+
   async function invalidateUserSignals() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['search-profile', session.user_id] }),
@@ -2070,6 +2128,9 @@ function Workspace({
     const inCart = cartMap.has(item.id)
     const statusLabel = item.statusLabel ?? (inCart ? 'В подборке' : 'В каталоге')
     const secondaryLabel = item.secondaryLabel ?? (inComparison ? 'В сравнении' : 'Без предложений')
+    const reasonItems = options?.showReasons
+      ? (item.reasons ?? []).slice(0, 3).map((reason) => formatSearchReason(reason))
+      : []
 
     const productPath = buildProductPath(item.id, currentSessionId)
 
@@ -2192,32 +2253,44 @@ function Workspace({
           >
             {item.title}
           </ProductTitle>
+          <ProductContextRow>
+            <ProductContextChip $tone="neutral">ID {item.id}</ProductContextChip>
+            {inFavorites ? <ProductContextChip $tone="accent">Избранное</ProductContextChip> : null}
+            {inComparison ? <ProductContextChip $tone="warning">Сравнение</ProductContextChip> : null}
+            {inCart ? <ProductContextChip $tone="success">В корзине</ProductContextChip> : null}
+            {typeof item.score === 'number' ? (
+              <ProductContextChip $tone="accent">Score {item.score.toFixed(2)}</ProductContextChip>
+            ) : null}
+          </ProductContextRow>
           <ProductTechMeta>
             <ProductTechLine>
-              <MetaLabel>Поставщик:</MetaLabel> {item.supplier}
+              <ProductTechLabel>Поставщик</ProductTechLabel>
+              <ProductTechValue>{item.supplier}</ProductTechValue>
             </ProductTechLine>
             <ProductTechLine>
-              <MetaLabel>Категория:</MetaLabel> {item.category}
+              <ProductTechLabel>Категория</ProductTechLabel>
+              <ProductTechValue>{item.category}</ProductTechValue>
             </ProductTechLine>
           </ProductTechMeta>
           <ProductMeta>
-            {typeof item.score === 'number' ? (
-              <div>
-                <MetaLabel>Релевантность:</MetaLabel> {item.score.toFixed(2)}
-              </div>
+            {reasonItems.length ? (
+              <ProductReasonPanel>
+                <ProductReasonHeader>Почему позиция в фокусе</ProductReasonHeader>
+                <ProductReasonList>
+                  {reasonItems.map((reason) => (
+                    <ProductReasonChip key={`${item.id}-${reason}`}>{reason}</ProductReasonChip>
+                  ))}
+                </ProductReasonList>
+              </ProductReasonPanel>
             ) : null}
-            {options?.showReasons && item.reasons?.length ? (
-              <div>
-                <MetaLabel>Почему показано:</MetaLabel> {item.reasons
-                  .slice(0, 2)
-                  .map((reason) => formatSearchReason(reason))
-                  .join(', ')}
-              </div>
-            ) : (
-              <div>
-                <MetaLabel>Статус:</MetaLabel> доступно для сравнения и закупочной подборки
-              </div>
-            )}
+            <ProductReasonPanel>
+              <ProductReasonHeader>Контекст</ProductReasonHeader>
+              <ProductReasonText>
+                {reasonItems.length
+                  ? 'Карточка уже содержит сигналы для shortlist, сравнения и закупочной подборки.'
+                  : 'Позиция доступна для сравнения, сохранения в shortlist и добавления в закупочную корзину.'}
+              </ProductReasonText>
+            </ProductReasonPanel>
           </ProductMeta>
         </ProductBody>
 
@@ -2233,7 +2306,9 @@ function Workspace({
             </ProductStatusCard>
           </ProductStatusRow>
           <ProductActions>
-            <Button
+            <SurfaceButton
+              $tone={inCart ? 'success' : 'accent'}
+              $emphasis={inCart ? 'soft' : 'solid'}
               icon={<ShoppingCartOutlined />}
               onClick={() =>
                 cartMutation.mutate({
@@ -2243,11 +2318,11 @@ function Workspace({
               }
             >
               {inCart ? 'В корзине' : 'В корзину'}
-            </Button>
-            <Button danger onClick={markIrrelevant}>
+            </SurfaceButton>
+            <SurfaceButton $tone="danger" $emphasis="soft" onClick={markIrrelevant}>
               Нерелевантно
-            </Button>
-            <Button onClick={openDetails}>Карточка</Button>
+            </SurfaceButton>
+            <SurfaceButton $tone="neutral" $emphasis="soft" onClick={openDetails}>Карточка</SurfaceButton>
           </ProductActions>
         </ProductFooter>
       </ProductCard>
@@ -2261,23 +2336,6 @@ function Workspace({
       onLogout={onLogout}
       headerTools={
         <HeaderTools>
-          <HeaderTool type="button" aria-label="menu">
-            <MenuOutlined />
-          </HeaderTool>
-          <HeaderTool type="button" aria-label="search">
-            <SearchOutlined />
-          </HeaderTool>
-          <HeaderTool type="button" aria-label="support">
-            <BellOutlined />
-          </HeaderTool>
-          <HeaderTool type="button" aria-label="ideas">
-            <BulbOutlined />
-          </HeaderTool>
-          <HeaderTool type="button" aria-label="favorites">
-            <Badge count={favoritesQuery.data?.length ?? 0} size="small">
-              <HeartOutlined />
-            </Badge>
-          </HeaderTool>
           <HeaderTool type="button" aria-label="cart" onClick={() => navigate('/cart')}>
             <Badge count={cartQuery.data?.length ?? 0} size="small">
               <ShoppingCartOutlined />
@@ -2289,6 +2347,73 @@ function Workspace({
       {contextHolder}
       <Main>
         <SearchStrip>
+          <SearchHeroTop>
+            <HeroIntroBlock>
+              <HeroEyebrow>
+                {session.role === 'supplier' ? 'Рабочая зона поставщика' : 'Рабочая зона заказчика'}
+              </HeroEyebrow>
+              <HeroTitle>
+                {session.role === 'supplier'
+                  ? 'Следите за спросом, конкурентами и shortlist в одном контуре'
+                  : 'Собирайте закупочный сценарий и рабочий shortlist без лишних переходов'}
+              </HeroTitle>
+              <HeroText>
+                {entryMode === 'history'
+                  ? 'Кабинет уже накопил историю и сигналы. Верхний блок теперь показывает, в каком режиме вы работаете и какой сценарий сейчас в фокусе.'
+                  : entryMode === 'context'
+                  ? 'Организационный контекст уже доступен. Используйте его как опору для первого личного сценария и быстрых действий по каталогу.'
+                  : 'Новый кабинет стартует с нуля. Сначала выберите предметный сценарий, затем закрепите полезные позиции в избранном, сравнении или корзине.'}
+              </HeroText>
+              <HeroActionRow>
+                {historyQuery.data?.items?.[0]?.query ? (
+                  <SurfaceButton $tone="neutral" $emphasis="soft" onClick={() => openActivitySearch(historyQuery.data.items[0].query)}>
+                    Последний запрос
+                  </SurfaceButton>
+                ) : null}
+                {session.role === 'supplier' ? (
+                  <SurfaceButton $tone="accent" $emphasis="soft" onClick={() => navigate('/supplier')}>
+                    Открыть dashboard
+                  </SurfaceButton>
+                ) : (
+                  <SurfaceButton $tone="accent" $emphasis="soft" onClick={() => setActiveTab('favorites')}>
+                    Открыть shortlist
+                  </SurfaceButton>
+                )}
+              </HeroActionRow>
+            </HeroIntroBlock>
+
+            <SnapshotGrid>
+              <SnapshotCard $tone="cool">
+                <SnapshotLabel>Режим</SnapshotLabel>
+                <SnapshotValue>{entryModeLabel}</SnapshotValue>
+                <SnapshotHint>{session.persona ?? 'Рабочий профиль пользователя'}</SnapshotHint>
+              </SnapshotCard>
+              <SnapshotCard $tone="cool">
+                <SnapshotLabel>Текущий сценарий</SnapshotLabel>
+                <SnapshotValue>{currentScenarioTitle}</SnapshotValue>
+                <SnapshotHint>{currentScenarioHint}</SnapshotHint>
+              </SnapshotCard>
+              <SnapshotCard $tone="cool">
+                <SnapshotLabel>Сигналы профиля</SnapshotLabel>
+                <SnapshotValue>{profileSignalCount.toLocaleString('ru-RU')}</SnapshotValue>
+                <SnapshotHint>
+                  {hasProfileSignals
+                    ? 'Профиль уже влияет на explainability и приоритизацию.'
+                    : 'Сигналы появятся после первых поисков и действий в каталоге.'}
+                </SnapshotHint>
+              </SnapshotCard>
+              <SnapshotCard $tone="cool">
+                <SnapshotLabel>Рабочий контур</SnapshotLabel>
+                <SnapshotValue>
+                  {(favoritesQuery.data?.length ?? 0) + (cartQuery.data?.length ?? 0)}
+                </SnapshotValue>
+                <SnapshotHint>
+                  Позиции в избранном и корзине, к которым можно быстро вернуться.
+                </SnapshotHint>
+              </SnapshotCard>
+            </SnapshotGrid>
+          </SearchHeroTop>
+
           <SearchRow>
             <CatalogButton icon={<AppstoreOutlined />}>Каталог</CatalogButton>
 
@@ -2328,7 +2453,9 @@ function Workspace({
               />
             </SearchInputWrap>
 
-            <Button
+            <SurfaceButton
+              $tone="neutral"
+              $emphasis="soft"
               icon={<StarOutlined />}
               onClick={() => {
                 setActiveTab('favorites')
@@ -2336,30 +2463,34 @@ function Workspace({
               }}
             >
               Есть предложения
-            </Button>
+            </SurfaceButton>
           </SearchRow>
 
           <SearchMetaRow>
             <SearchMetaGroup>
-              <Tag color={session.role === 'supplier' ? 'orange' : 'blue'}>
+              <StatusPill $tone={session.role === 'supplier' ? 'supplier' : 'info'}>
                 {session.role === 'supplier' ? 'Поставщик' : 'Заказчик'}
-              </Tag>
-              <Tag>{session.persona}</Tag>
-              <Tag color={strictMatch ? 'red' : 'default'}>
+              </StatusPill>
+              <StatusPill $tone="neutral">{session.persona}</StatusPill>
+              <StatusPill $tone={strictMatch ? 'danger' : 'neutral'}>
                 {strictMatch ? 'Strict match' : 'Мягкий поиск'}
-              </Tag>
+              </StatusPill>
             </SearchMetaGroup>
 
             <SearchMetaGroup>
-              <Button type={strictMatch ? 'primary' : 'default'} onClick={toggleStrictMatch}>
+              <SurfaceButton
+                $tone={strictMatch ? 'accent' : 'neutral'}
+                $emphasis={strictMatch ? 'soft' : 'outline'}
+                onClick={toggleStrictMatch}
+              >
                 {strictMatch ? 'Строгое совпадение' : 'Включить strict match'}
-              </Button>
+              </SurfaceButton>
             </SearchMetaGroup>
           </SearchMetaRow>
         </SearchStrip>
 
         {showOnboardingStrip ? (
-          <OnboardingStrip>
+          <OnboardingSurface $tone="cool">
             <OnboardingHeader>
               <OnboardingTitle>
                 {session.role === 'supplier'
@@ -2377,18 +2508,19 @@ function Workspace({
             <OnboardingGrid>
               {starterScenarios.map((scenario) => (
                 <OnboardingCard
+                  $tone="cool"
                   key={scenario.key}
                   type="button"
                   onClick={() => void applyStarterScenario(scenario)}
                 >
-                  <Tag color="blue">Стартовый сценарий</Tag>
-                  <OnboardingCardTitle>{scenario.title}</OnboardingCardTitle>
+                  <StatusPill $tone="info">Стартовый сценарий</StatusPill>
+                  <OnboardingCardTitle $tone="cool">{scenario.title}</OnboardingCardTitle>
                   <OnboardingCardText>{scenario.description}</OnboardingCardText>
-                  <OnboardingCardAction>Открыть выдачу</OnboardingCardAction>
+                  <OnboardingCardAction $tone="cool">Открыть выдачу</OnboardingCardAction>
                 </OnboardingCard>
               ))}
             </OnboardingGrid>
-          </OnboardingStrip>
+          </OnboardingSurface>
         ) : null}
 
         <WorkspaceGrid>
@@ -2502,32 +2634,32 @@ function Workspace({
                 <Skeleton active paragraph={{ rows: 4 }} />
               ) : summaryQuery.data ? (
                 <>
-                  <SummaryGrid>
-                    <SummaryStat>
-                      <SummaryValue>{summaryQuery.data.ste_items_count.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Позиций СТЕ</SummaryLabel>
-                    </SummaryStat>
-                    <SummaryStat>
-                      <SummaryValue>{summaryQuery.data.categories_count.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Категорий</SummaryLabel>
-                    </SummaryStat>
-                    <SummaryStat>
-                      <SummaryValue>{summaryQuery.data.suppliers_count.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Поставщиков</SummaryLabel>
-                    </SummaryStat>
-                    <SummaryStat>
-                      <SummaryValue>{summaryQuery.data.purchase_history_count.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Записей истории закупок</SummaryLabel>
-                    </SummaryStat>
-                    <SummaryStat>
-                      <SummaryValue>{summaryQuery.data.favorites_count.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Избранное пользователя</SummaryLabel>
-                    </SummaryStat>
-                    <SummaryStat>
-                      <SummaryValue>{summaryQuery.data.cart_count.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Позиций в корзине</SummaryLabel>
-                    </SummaryStat>
-                  </SummaryGrid>
+                  <MetricGrid $columns={2}>
+                    <MetricCard>
+                      <MetricValue>{summaryQuery.data.ste_items_count.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Позиций СТЕ</MetricLabel>
+                    </MetricCard>
+                    <MetricCard>
+                      <MetricValue>{summaryQuery.data.categories_count.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Категорий</MetricLabel>
+                    </MetricCard>
+                    <MetricCard>
+                      <MetricValue>{summaryQuery.data.suppliers_count.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Поставщиков</MetricLabel>
+                    </MetricCard>
+                    <MetricCard>
+                      <MetricValue>{summaryQuery.data.purchase_history_count.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Записей истории закупок</MetricLabel>
+                    </MetricCard>
+                    <MetricCard>
+                      <MetricValue>{summaryQuery.data.favorites_count.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Избранное пользователя</MetricLabel>
+                    </MetricCard>
+                    <MetricCard>
+                      <MetricValue>{summaryQuery.data.cart_count.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Позиций в корзине</MetricLabel>
+                    </MetricCard>
+                  </MetricGrid>
 
                   <SignalList>
                     <SignalCard>
@@ -2602,32 +2734,32 @@ function Workspace({
                   <Skeleton active paragraph={{ rows: 5 }} />
                 ) : supplierInsightsQuery.data ? (
                   <>
-                    <SummaryGrid>
-                      <SummaryStat>
-                        <SummaryValue>
+                    <MetricGrid $columns={2}>
+                      <MetricCard>
+                        <MetricValue>
                           {supplierInsightsQuery.data.owned_catalog_items_count.toLocaleString('ru-RU')}
-                        </SummaryValue>
-                        <SummaryLabel>Позиции вашего ассортимента</SummaryLabel>
-                      </SummaryStat>
-                      <SummaryStat>
-                        <SummaryValue>
+                        </MetricValue>
+                        <MetricLabel>Позиции вашего ассортимента</MetricLabel>
+                      </MetricCard>
+                      <MetricCard>
+                        <MetricValue>
                           {supplierInsightsQuery.data.tracked_categories_count.toLocaleString('ru-RU')}
-                        </SummaryValue>
-                        <SummaryLabel>Категорий под наблюдением</SummaryLabel>
-                      </SummaryStat>
-                      <SummaryStat>
-                        <SummaryValue>
+                        </MetricValue>
+                        <MetricLabel>Категорий под наблюдением</MetricLabel>
+                      </MetricCard>
+                      <MetricCard>
+                        <MetricValue>
                           {supplierInsightsQuery.data.owned_purchase_history_count.toLocaleString('ru-RU')}
-                        </SummaryValue>
-                        <SummaryLabel>Закупок по вашему сегменту</SummaryLabel>
-                      </SummaryStat>
-                      <SummaryStat>
-                        <SummaryValue>
+                        </MetricValue>
+                        <MetricLabel>Закупок по вашему сегменту</MetricLabel>
+                      </MetricCard>
+                      <MetricCard>
+                        <MetricValue>
                           {supplierInsightsQuery.data.top_competitors.length.toLocaleString('ru-RU')}
-                        </SummaryValue>
-                        <SummaryLabel>Ключевых конкурентов</SummaryLabel>
-                      </SummaryStat>
-                    </SummaryGrid>
+                        </MetricValue>
+                        <MetricLabel>Ключевых конкурентов</MetricLabel>
+                      </MetricCard>
+                    </MetricGrid>
 
                     {supplierInsightsQuery.data.matched_suppliers.length ? (
                       <SignalList>
@@ -2692,16 +2824,16 @@ function Workspace({
                 <Skeleton active paragraph={{ rows: 4 }} />
               ) : (
                 <>
-                  <SummaryGrid>
-                    <SummaryStat>
-                      <SummaryValue>{(purchaseHistoryQuery.data ?? []).length.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Последних закупок в профиле</SummaryLabel>
-                    </SummaryStat>
-                    <SummaryStat>
-                      <SummaryValue>{topResultCategories.length.toLocaleString('ru-RU')}</SummaryValue>
-                      <SummaryLabel>Категорий в текущей выдаче</SummaryLabel>
-                    </SummaryStat>
-                  </SummaryGrid>
+                  <MetricGrid $columns={2}>
+                    <MetricCard>
+                      <MetricValue>{(purchaseHistoryQuery.data ?? []).length.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Последних закупок в профиле</MetricLabel>
+                    </MetricCard>
+                    <MetricCard>
+                      <MetricValue>{topResultCategories.length.toLocaleString('ru-RU')}</MetricValue>
+                      <MetricLabel>Категорий в текущей выдаче</MetricLabel>
+                    </MetricCard>
+                  </MetricGrid>
                   {hasPurchaseHistory ? (
                     <PurchaseList>
                       {(purchaseHistoryQuery.data ?? []).slice(0, 4).map((item) => (
@@ -2738,7 +2870,7 @@ function Workspace({
           </Sidebar>
 
           <Content>
-            <SectionCard>
+            <SectionSurface>
               <TabsRow>
                 {session.role === 'supplier' ? (
                   <TabButton $active={false} onClick={() => navigate('/supplier')}>
@@ -2777,16 +2909,16 @@ function Workspace({
                 </TabButton>
               </TabsRow>
 
-              <ContentHeader>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <ContentTitle level={2}>
+              <SectionHeaderBar $padding="content" $bordered>
+                <SectionHeadingStack>
+                  <SectionHeading>
                     {activeTab === 'catalog'
                       ? 'Результаты каталога'
                       : activeTab === 'favorites'
                       ? 'Избранные позиции'
                       : 'Сравнение товаров'}
-                  </ContentTitle>
-                  <ContentHint>
+                  </SectionHeading>
+                  <SectionHeadingHint>
                     {activeTab === 'catalog'
                       ? searchState.kind === 'results'
                         ? `Запрос: ${searchState.response.meta.query}`
@@ -2800,8 +2932,8 @@ function Workspace({
                       : visibleCompareItems.length
                       ? 'До 4 позиций для сравнения характеристик'
                       : 'Добавьте сюда 2-4 позиции из каталога, чтобы увидеть отличия по параметрам'}
-                  </ContentHint>
-                </div>
+                  </SectionHeadingHint>
+                </SectionHeadingStack>
 
                 <SearchMetaGroup>
                   {searchState.kind === 'results' && activeTab === 'catalog' ? (
@@ -2817,19 +2949,19 @@ function Workspace({
                           { value: 'supplier_asc', label: 'Сортировка: по поставщику' },
                         ]}
                       />
-                      <Tag color="processing">Режим: {searchState.response.meta.ranking_mode}</Tag>
+                      <StatusPill $tone="accent">Режим: {searchState.response.meta.ranking_mode}</StatusPill>
                       {searchState.response.meta.corrected_query ? (
-                        <Tag color="blue">Исправлено: {searchState.response.meta.corrected_query}</Tag>
+                        <StatusPill $tone="info">Исправлено: {searchState.response.meta.corrected_query}</StatusPill>
                       ) : null}
                       {searchState.response.meta.applied_synonyms.length ? (
-                        <Tag color="purple">
+                        <StatusPill $tone="purple">
                           Синонимы: {searchState.response.meta.applied_synonyms.slice(0, 2).join(', ')}
-                        </Tag>
+                        </StatusPill>
                       ) : null}
                     </>
                   ) : null}
                 </SearchMetaGroup>
-              </ContentHeader>
+              </SectionHeaderBar>
 
               {activeTab === 'catalog' ? (
                 <>
@@ -2941,31 +3073,78 @@ function Workspace({
                 visibleCompareItems.length ? (
                   <CompareTable>
                     <CompareLead>
-                      Сравнение построено как витрина каталога: карточки позиций сверху и таблица
-                      параметров снизу. Подсвеченные строки помогают быстрее увидеть различия.
+                      <CompareLeadTitle>Compare-витрина</CompareLeadTitle>
+                      Сравнение построено как расширение каталога: сверху те же product-карточки,
+                      снизу структурированная таблица параметров. Подсвеченные строки сразу
+                      показывают, где позиции реально расходятся.
                     </CompareLead>
                     <CompareCards>
                       {visibleCompareItems.map((item) => {
                         const [from, to] = buildCardTone(item.item.id)
+                        const compareInFavorites = favoriteIds.has(item.item.id)
+                        const compareInCart = cartMap.has(item.item.id)
                         return (
                           <CompareSubjectCard key={item.id}>
+                            <CompareSubjectTop>
+                              <CompareSubjectStamp>ID СТЕ {item.item.id}</CompareSubjectStamp>
+                              <CompareSubjectSignalRow>
+                                {compareInFavorites ? (
+                            <ProductContextChip $tone="accent">Избранное</ProductContextChip>
+                                ) : null}
+                                <ProductContextChip $tone="warning">Сравнение</ProductContextChip>
+                                {compareInCart ? (
+                                  <ProductContextChip $tone="success">В корзине</ProductContextChip>
+                                ) : null}
+                              </CompareSubjectSignalRow>
+                            </CompareSubjectTop>
                             <CompareSubjectVisual $from={from} $to={to}>
                               <ProductVisualLabel>{buildCardLabel(item.item.title)}</ProductVisualLabel>
                             </CompareSubjectVisual>
                             <CompareSubjectTitle>{item.item.title}</CompareSubjectTitle>
                             <CompareSubjectMeta>
-                              <span>ID СТЕ: {item.item.id}</span>
-                              <span>{item.item.category_name}</span>
-                              <span>{item.item.supplier_name}</span>
+                              <CompareMetaCard>
+                                <CompareMetaLabel>Категория</CompareMetaLabel>
+                                <CompareMetaValue>{item.item.category_name}</CompareMetaValue>
+                              </CompareMetaCard>
+                              <CompareMetaCard>
+                                <CompareMetaLabel>Поставщик</CompareMetaLabel>
+                                <CompareMetaValue>{item.item.supplier_name}</CompareMetaValue>
+                              </CompareMetaCard>
                             </CompareSubjectMeta>
+                            <CompareSubjectFooter>
+                              <ProductStatusRow>
+                                <ProductStatusCard>
+                                  <ProductStatusValue>В сравнении</ProductStatusValue>
+                                  <ProductStatusLabel>Состояние позиции</ProductStatusLabel>
+                                </ProductStatusCard>
+                                <ProductStatusCard>
+                                  <ProductStatusValue>
+                                    {compareInCart ? 'Готово к подборке' : 'Проверка различий'}
+                                  </ProductStatusValue>
+                                  <ProductStatusLabel>Рабочий контекст</ProductStatusLabel>
+                                </ProductStatusCard>
+                              </ProductStatusRow>
+                              <ProductReasonPanel>
+                                <ProductReasonHeader>Фокус сравнения</ProductReasonHeader>
+                                <ProductReasonText>
+                                  {compareDifferenceLabels.size
+                                    ? 'Подсвеченные строки в таблице ниже показывают отличия по статусу, поставщику и атрибутам.'
+                                    : 'Текущий набор параметров почти совпадает, различия минимальны.'}
+                                </ProductReasonText>
+                              </ProductReasonPanel>
+                            </CompareSubjectFooter>
                             <ProductActions>
-                              <Button
+                              <SurfaceButton
+                                $tone="neutral"
+                                $emphasis="soft"
                                 size="small"
                                 onClick={() => navigate(buildProductPath(item.item.id, currentSessionId))}
                               >
                                 Карточка
-                              </Button>
-                              <Button
+                              </SurfaceButton>
+                              <SurfaceButton
+                                $tone="danger"
+                                $emphasis="soft"
                                 size="small"
                                 onClick={() =>
                                   comparisonMutation.mutate({
@@ -2975,7 +3154,7 @@ function Workspace({
                                 }
                               >
                                 Убрать
-                              </Button>
+                              </SurfaceButton>
                             </ProductActions>
                           </CompareSubjectCard>
                         )
@@ -2984,7 +3163,16 @@ function Workspace({
                         length: Math.max(0, 4 - visibleCompareItems.length),
                       }).map((_, index) => (
                         <CompareSubjectCard key={`empty-card-${index}`}>
-                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Свободный слот" />
+                          <CompareSubjectTop>
+                            <CompareSubjectStamp>Свободный слот</CompareSubjectStamp>
+                          </CompareSubjectTop>
+                          <EmptyStateBlock $gap={14}>
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Добавьте позицию" />
+                            <EmptyStateText $size="md">
+                              Слот резервирует место под еще одну карточку. Добавьте позицию из
+                              каталога или из shortlist, чтобы расширить сравнение.
+                            </EmptyStateText>
+                          </EmptyStateBlock>
                         </CompareSubjectCard>
                       ))}
                     </CompareCards>
@@ -3037,12 +3225,12 @@ function Workspace({
                   </CompareTable>
                 ) : (
                   <div style={{ padding: 28 }}>
-                    <CollectionEmptyState>
+                    <EmptyStateBlock $gap={14}>
                       <Empty description="Добавьте товары в сравнение из результатов поиска." />
-                      <CollectionEmptyText>
+                      <EmptyStateText $size="md">
                         Сравнение собирается из карточек каталога. Откройте готовый сценарий,
                         отметьте 2-4 позиции и вернитесь сюда для просмотра различий.
-                      </CollectionEmptyText>
+                      </EmptyStateText>
                       <CollectionActionRow>
                         <Button onClick={() => setActiveTab('catalog')}>Открыть каталог</Button>
                         {collectionStarterScenarios.slice(0, 2).map((scenario) => (
@@ -3056,7 +3244,7 @@ function Workspace({
                           </Button>
                         ))}
                       </CollectionActionRow>
-                    </CollectionEmptyState>
+                    </EmptyStateBlock>
                   </div>
                 )
               ) : activeCollectionItems.length ? (
@@ -3090,7 +3278,7 @@ function Workspace({
                 </>
               ) : (
                 <div style={{ padding: 28 }}>
-                  <CollectionEmptyState>
+                  <EmptyStateBlock $gap={14}>
                     <Empty
                       description={
                         activeTab === 'favorites'
@@ -3098,11 +3286,11 @@ function Workspace({
                           : 'Пока нет позиций в этом разделе.'
                       }
                     />
-                    <CollectionEmptyText>
+                    <EmptyStateText $size="md">
                       {activeTab === 'favorites'
                         ? 'Избранное помогает быстро собирать shortlist. Добавьте сюда позиции из каталога или из стартового сценария.'
                         : 'Раздел пока пуст. Откройте каталог и начните с готового сценария, чтобы наполнить его полезными позициями.'}
-                    </CollectionEmptyText>
+                    </EmptyStateText>
                     <CollectionActionRow>
                       <Button onClick={() => setActiveTab('catalog')}>Перейти в каталог</Button>
                       {collectionStarterScenarios.slice(0, 2).map((scenario) => (
@@ -3116,33 +3304,33 @@ function Workspace({
                         </Button>
                       ))}
                     </CollectionActionRow>
-                  </CollectionEmptyState>
+                  </EmptyStateBlock>
                 </div>
               )}
-            </SectionCard>
+            </SectionSurface>
 
-            <SectionCard>
-              <ContentHeader>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <ContentTitle level={2}>Подсказки профиля</ContentTitle>
-                  <ContentHint>
+            <SectionSurface>
+              <SectionHeaderBar $padding="content" $bordered>
+                <SectionHeadingStack>
+                  <SectionHeading>Подсказки профиля</SectionHeading>
+                  <SectionHeadingHint>
                     {hasProfileSignals || hasSearchHistory
                       ? 'Последние запросы и популярные категории для выбранного пользователя'
                       : 'Пока профиль пустой: здесь появятся ваши рабочие категории, запросы и быстрые возвраты'}
-                  </ContentHint>
-                </div>
-              </ContentHeader>
+                  </SectionHeadingHint>
+                </SectionHeadingStack>
+              </SectionHeaderBar>
               <div style={{ padding: 20, display: 'grid', gap: 16 }}>
                 {hasProfileSignals || hasSearchHistory ? (
                   <>
-                    <HintPanel>
+                    <HintSurface>
                       <HintText>
                         {session.entry_mode === 'context'
                           ? 'Организационный контекст уже влияет на выдачу. Новые запросы и действия помогут быстрее превратить его в персональный профиль.'
                           : 'Этот блок собирает рабочий контекст пользователя: частые категории, повторяемые запросы и темы, к которым удобно возвращаться.'}
                       </HintText>
                       {session.entry_note ? <HintText>{session.entry_note}</HintText> : null}
-                    </HintPanel>
+                    </HintSurface>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {(profileQuery.data?.top_categories ?? []).slice(0, 8).map((item) => (
                         <Tag key={item} color="processing">
@@ -3152,20 +3340,14 @@ function Workspace({
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {(historyQuery.data?.items ?? []).slice(0, 6).map((item: SearchHistoryItem) => (
-                        <Button
-                          key={item.id}
-                          onClick={() => {
-                            setSearchValue(item.query)
-                            void runSearch(item.query)
-                          }}
-                        >
+                        <Button key={item.id} onClick={() => openActivitySearch(item.query)}>
                           {item.query}
                         </Button>
                       ))}
                     </div>
                   </>
                 ) : (
-                  <HintPanel>
+                  <HintSurface>
                     <HintText>
                       Профиль еще не накопил поисковые сигналы. После первых запросов здесь появятся
                       категории, к которым пользователь чаще всего возвращается, и быстрые кнопки
@@ -3184,19 +3366,19 @@ function Workspace({
                         </Button>
                       ))}
                     </CollectionActionRow>
-                  </HintPanel>
+                  </HintSurface>
                 )}
               </div>
-            </SectionCard>
+            </SectionSurface>
 
-            <SectionCard>
-              <ContentHeader>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <ContentTitle level={2}>Последние действия</ContentTitle>
-                  <ContentHint>
+            <SectionSurface>
+              <SectionHeaderBar $padding="content" $bordered>
+                <SectionHeadingStack>
+                  <SectionHeading>Последние действия</SectionHeading>
+                  <SectionHeadingHint>
                     Живая лента недавних поисковых и закупочных действий пользователя
-                  </ContentHint>
-                </div>
+                  </SectionHeadingHint>
+                </SectionHeadingStack>
                 <Select
                   size="middle"
                   value={activityFilter}
@@ -3204,7 +3386,7 @@ function Workspace({
                   onChange={(value) => setActivityFilter(value as ActivityFilter)}
                   options={activityFilterOptions}
                 />
-              </ContentHeader>
+              </SectionHeaderBar>
               <div style={{ padding: 20, display: 'grid', gap: 16 }}>
                 {activityQuery.isLoading ? (
                   <Skeleton active paragraph={{ rows: 5 }} />
@@ -3219,16 +3401,37 @@ function Workspace({
                           </Typography.Text>
                         </ActivityTop>
                         <ActivityMeta>
-                          <Tag color={getActivityColor(item.event_type)}>{item.event_type}</Tag>
-                          {item.query ? <Tag>{item.query}</Tag> : null}
-                          {item.ste_title ? <Tag color="geekblue">{item.ste_title}</Tag> : null}
+                          <StatusPill $tone={getActivityPillTone(item.event_type)}>{item.event_type}</StatusPill>
+                          {item.query ? <StatusPill $tone="neutral">{item.query}</StatusPill> : null}
+                          {item.ste_title ? <StatusPill $tone="info">{item.ste_title}</StatusPill> : null}
                         </ActivityMeta>
                         <ActivityText>{item.description}</ActivityText>
+                        <InlineActionRow>
+                          {item.query ? (
+                            <SurfaceButton $tone="neutral" $emphasis="soft" size="small" onClick={() => openActivitySearch(item.query ?? '')}>
+                              Повторить поиск
+                            </SurfaceButton>
+                          ) : null}
+                          {item.ste_id ? (
+                            <SurfaceButton $tone="accent" $emphasis="soft" size="small" onClick={() => openActivityProduct(item.ste_id ?? '')}>
+                              Открыть карточку
+                            </SurfaceButton>
+                          ) : null}
+                          {(item.event_type === 'cart_added' ||
+                            item.event_type === 'cart_removed' ||
+                            item.event_type === 'cart_quantity_changed' ||
+                            item.event_type === 'purchase_intent' ||
+                            item.event_type === 'purchase_completed') ? (
+                            <SurfaceButton $tone="success" $emphasis="soft" size="small" onClick={() => navigate('/cart')}>
+                              Открыть корзину
+                            </SurfaceButton>
+                          ) : null}
+                        </InlineActionRow>
                       </ActivityCard>
                     ))}
                   </ActivityTimeline>
                 ) : (activityQuery.data?.items ?? []).length ? (
-                  <HintPanel>
+                  <HintSurface>
                     <HintText>
                       Для выбранного фильтра пока нет событий. Переключите тип действий или
                       продолжите сценарий в каталоге, чтобы собрать новые сигналы.
@@ -3246,9 +3449,9 @@ function Workspace({
                         </Button>
                       ))}
                     </CollectionActionRow>
-                  </HintPanel>
+                  </HintSurface>
                 ) : (
-                  <HintPanel>
+                  <HintSurface>
                     <HintText>
                       История действий пока пуста. После первых поисков, открытий карточек,
                       добавлений в избранное и корзину здесь появится живая лента поведения
@@ -3267,10 +3470,10 @@ function Workspace({
                         </Button>
                       ))}
                     </CollectionActionRow>
-                  </HintPanel>
+                  </HintSurface>
                 )}
               </div>
-            </SectionCard>
+            </SectionSurface>
           </Content>
         </WorkspaceGrid>
       </Main>
