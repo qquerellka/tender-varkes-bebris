@@ -128,6 +128,72 @@ python ML/tools/build_ml_splits.py
 python ML/tools/train_ranker.py --artifacts-dir ML/models/catboost_ranker_v1
 ```
 
+## Быстрый Старт Для ML
+
+Минимальный локальный цикл для ML-инженера:
+
+```bash
+cd backend
+source .venv/bin/activate
+pip install -e ".[semantic]"
+cp .env.example .env
+alembic upgrade head
+python -m app.bootstrap
+uvicorn app.main:app --reload
+```
+
+Полезно проверить сразу после старта:
+
+```bash
+curl -s http://localhost:8000/api/v1/debug/search-stack | jq
+```
+
+Для dry-run разбора одного запроса без записи `search_session` и telemetry:
+
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/debug/search-ranking" \
+  -H "Content-Type: application/json" \
+  -H "X-Demo-User-Id: demo_customer_it" \
+  -d '{
+    "query": "сервер для офиса",
+    "filters": {
+      "strict_match": false
+    }
+  }' | jq
+```
+
+Этот endpoint отдает:
+- query normalization context
+- expanded terms и structured query hints
+- profile snapshot
+- candidate set с `baseline_score`, `retrieval_score`, `retrieval_features`
+- final ranking с `final_rank`, `final_score`, `score_delta`
+- статус ranking provider и fallback
+
+Для выгрузки live dataset в формат, совместимый с `ML/tools/build_ml_splits.py`:
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m app.export_ml_dataset \
+  --output-dir ../ML/data/live_export \
+  --build-splits
+```
+
+Полезные опции:
+- `--user-id demo_customer_it`
+- `--organization-id org_it`
+- `--limit-sessions 200`
+
+Команда экспортирует:
+- `search_sessions.csv`
+- `search_events.csv` и `search_events.jsonl`
+- `search_impressions.csv`
+- `query_relevance.csv`
+- `user_item_features.csv`
+- справочники каталога и profile tables
+- `export_metadata.json`
+
 ## Импорт реальных CSV портала
 
 Поддержан импорт файлов:
@@ -183,6 +249,9 @@ GET  /api/v1/search/spellcheck?query=абтобус
 GET  /api/v1/search/history
 POST /api/v1/search
 POST /api/v1/events
+POST /api/v1/debug/search-ranking
+GET  /api/v1/debug/search-stack
 GET  /api/v1/debug/telemetry/events
 GET  /api/v1/debug/telemetry/impressions
+GET  /api/v1/debug/telemetry/health
 ```

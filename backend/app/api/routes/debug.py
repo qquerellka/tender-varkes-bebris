@@ -4,15 +4,23 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import (
     get_current_actor,
     get_event_service,
+    get_search_service,
     get_session_dependency,
 )
+from app.api.routes.search import ensure_search_stack_ready
 from app.domain.events.schemas import (
     SearchEventListRead,
     SearchImpressionListRead,
     TelemetryHealthRead,
 )
 from app.domain.events.service import EventService
-from app.domain.search.schemas import CurrentActor, SearchStackStatusRead
+from app.domain.search.schemas import (
+    CurrentActor,
+    SearchDebugResponse,
+    SearchRequest,
+    SearchStackStatusRead,
+)
+from app.domain.search.service import SearchService
 
 router = APIRouter()
 
@@ -33,6 +41,17 @@ async def get_debug_search_stack(request: Request) -> SearchStackStatusRead:
         search_warmup_error=getattr(request.app.state, "search_warmup_error", None),
         ranking_warmup_error=getattr(request.app.state, "ranking_warmup_error", None),
     )
+
+
+@router.post("/search-ranking", response_model=SearchDebugResponse)
+async def debug_search_ranking(
+    payload: SearchRequest,
+    _: None = Depends(ensure_search_stack_ready),
+    session: Session = Depends(get_session_dependency),
+    actor: CurrentActor = Depends(get_current_actor),
+) -> SearchDebugResponse:
+    search_service = get_search_service(session)
+    return search_service.debug_search_ranking(payload=payload, actor=actor)
 
 
 @router.get("/telemetry/events", response_model=SearchEventListRead)

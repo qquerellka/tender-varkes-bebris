@@ -24,16 +24,77 @@ ML service не должен заменять:
 - fallback ranking
 
 Семантика пользовательских событий и таблиц telemetry описана отдельно в:
-- [TELEMETRY_SPEC.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_SPEC.md)
-- [TELEMETRY_EVENT_DICTIONARY.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_EVENT_DICTIONARY.md)
-- [TELEMETRY_QA_CHECKLIST.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_QA_CHECKLIST.md)
+- [TELEMETRY_SPEC.md](./TELEMETRY_SPEC.md)
+- [TELEMETRY_EVENT_DICTIONARY.md](./TELEMETRY_EVENT_DICTIONARY.md)
+- [TELEMETRY_QA_CHECKLIST.md](./TELEMETRY_QA_CHECKLIST.md)
 
 Примеры экспортируемых данных для ML handoff:
-- [examples/search_events.sample.jsonl](/home/qquerell/programming/frontend-template/my-app/backend/examples/search_events.sample.jsonl)
-- [examples/search_impressions.sample.csv](/home/qquerell/programming/frontend-template/my-app/backend/examples/search_impressions.sample.csv)
-- [examples/user_item_features.sample.csv](/home/qquerell/programming/frontend-template/my-app/backend/examples/user_item_features.sample.csv)
+- [examples/search_events.sample.jsonl](./examples/search_events.sample.jsonl)
+- [examples/search_impressions.sample.csv](./examples/search_impressions.sample.csv)
+- [examples/user_item_features.sample.csv](./examples/user_item_features.sample.csv)
 
-Для быстрой ручной проверки живой telemetry без SQL смотри готовые `curl`-примеры в [TELEMETRY_QA_CHECKLIST.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_QA_CHECKLIST.md).
+Для быстрой ручной проверки живой telemetry без SQL смотри готовые `curl`-примеры в [TELEMETRY_QA_CHECKLIST.md](./TELEMETRY_QA_CHECKLIST.md).
+
+## Quick Start Для ML
+
+1. Поднять backend с семантическим поиском и нужным ranking provider.
+2. Проверить состояние stack warmup через `GET /api/v1/debug/search-stack`.
+3. Разбирать конкретный запрос через `POST /api/v1/debug/search-ranking`.
+4. Использовать telemetry debug API и sample exports для offline анализа.
+
+Минимальные debug endpoints для ML:
+
+- `GET /api/v1/debug/search-stack`
+- `POST /api/v1/debug/search-ranking`
+- `GET /api/v1/debug/telemetry/events`
+- `GET /api/v1/debug/telemetry/impressions`
+- `GET /api/v1/debug/telemetry/health`
+
+`POST /api/v1/debug/search-ranking` не пишет `search_session` и `search_events`.
+Это dry-run ручка для разбора:
+
+- query normalization
+- correction type
+- synonyms
+- structured query hints
+- candidate set
+- retrieval features
+- baseline score
+- final rerank score
+- fallback to baseline
+
+Для выгрузки live dataset из backend в формат, который уже понимают `ML/tools/build_ml_splits.py`:
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m app.export_ml_dataset \
+  --output-dir ../ML/data/live_export \
+  --build-splits
+```
+
+Эта команда экспортирует:
+
+- `search_sessions.csv`
+- `search_events.csv`
+- `search_events.jsonl`
+- `search_impressions.csv`
+- `query_relevance.csv`
+- `user_item_features.csv`
+- `user_search_profiles.csv`
+- `org_search_profiles.csv`
+- справочники каталога
+- `export_metadata.json`
+
+Если нужен таргетный датасет по одному пользователю или организации:
+
+```bash
+python -m app.export_ml_dataset \
+  --output-dir ../ML/data/live_export_demo_customer_it \
+  --user-id demo_customer_it \
+  --limit-sessions 200 \
+  --build-splits
+```
 
 ## Текущий Search Pipeline
 
@@ -144,8 +205,8 @@ Backend должен:
     "applied_synonyms": ["оргтехника"]
   },
   "actor": {
-    "user_id": "user_1",
-    "organization_id": "org_1"
+    "user_id": "demo_customer_it",
+    "organization_id": "org_it"
   },
   "user_profile": {
     "top_categories": ["Офис", "ИТ"],
@@ -214,6 +275,8 @@ Backend должен:
 2. Отсортировать candidates по ML score.
 3. При необходимости применить финальные business rules после ML.
 4. Вернуть существующую frontend schema без зависимости от ML internals.
+
+Для отладки этого шага используйте `POST /api/v1/debug/search-ranking`: endpoint показывает `baseline_rank`, `final_rank`, `baseline_score`, `final_score`, `score_delta`, `retrieval_reasons` и `retrieval_features` по каждому candidate.
 
 ## Fallback Policy
 

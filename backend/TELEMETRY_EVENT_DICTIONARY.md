@@ -3,8 +3,8 @@
 Этот документ фиксирует словарь raw events для frontend, backend и handoff в ML-команду.
 
 Связанные документы:
-- [TELEMETRY_SPEC.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_SPEC.md)
-- [ML_HANDOFF.md](/home/qquerell/programming/frontend-template/my-app/backend/ML_HANDOFF.md)
+- [TELEMETRY_SPEC.md](./TELEMETRY_SPEC.md)
+- [ML_HANDOFF.md](./ML_HANDOFF.md)
 
 ## Формат События
 

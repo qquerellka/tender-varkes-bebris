@@ -7,8 +7,8 @@
 - не смешивать `raw events`, `business state` и `derived features`
 - дать ML-инженерам стабильный источник истины по логам
 
-Для краткой event-by-event расшифровки смотри также [TELEMETRY_EVENT_DICTIONARY.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_EVENT_DICTIONARY.md).
-Для ручной проверки telemetry через debug API смотри [TELEMETRY_QA_CHECKLIST.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_QA_CHECKLIST.md).
+Для краткой event-by-event расшифровки смотри также [TELEMETRY_EVENT_DICTIONARY.md](./TELEMETRY_EVENT_DICTIONARY.md).
+Для ручной проверки telemetry через debug API смотри [TELEMETRY_QA_CHECKLIST.md](./TELEMETRY_QA_CHECKLIST.md).
 
 ## Слои Данных
 
@@ -308,9 +308,9 @@ Backend не должен:
 - источники на frontend/backend
 
 Готовые примеры формата лежат в:
-- [examples/search_events.sample.jsonl](/home/qquerell/programming/frontend-template/my-app/backend/examples/search_events.sample.jsonl)
-- [examples/search_impressions.sample.csv](/home/qquerell/programming/frontend-template/my-app/backend/examples/search_impressions.sample.csv)
-- [examples/user_item_features.sample.csv](/home/qquerell/programming/frontend-template/my-app/backend/examples/user_item_features.sample.csv)
+- [examples/search_events.sample.jsonl](./examples/search_events.sample.jsonl)
+- [examples/search_impressions.sample.csv](./examples/search_impressions.sample.csv)
+- [examples/user_item_features.sample.csv](./examples/user_item_features.sample.csv)
 
 ## Примеры Экспорта
 
@@ -321,7 +321,7 @@ Backend не должен:
 - подходит для parquet/jsonl ingestion в ML pipeline
 
 Смотри:
-- [examples/search_events.sample.jsonl](/home/qquerell/programming/frontend-template/my-app/backend/examples/search_events.sample.jsonl)
+- [examples/search_events.sample.jsonl](./examples/search_events.sample.jsonl)
 
 ### Search impressions CSV
 
@@ -330,7 +330,7 @@ Backend не должен:
 - удобно для первичного CTR и label engineering
 
 Смотри:
-- [examples/search_impressions.sample.csv](/home/qquerell/programming/frontend-template/my-app/backend/examples/search_impressions.sample.csv)
+- [examples/search_impressions.sample.csv](./examples/search_impressions.sample.csv)
 
 ### Derived features CSV
 
@@ -339,7 +339,7 @@ Backend не должен:
 - подходит для первичного LTR feature store и offline training
 
 Смотри:
-- [examples/user_item_features.sample.csv](/home/qquerell/programming/frontend-template/my-app/backend/examples/user_item_features.sample.csv)
+- [examples/user_item_features.sample.csv](./examples/user_item_features.sample.csv)
 
 Типичные колонки:
 - `click_count`

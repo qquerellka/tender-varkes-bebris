@@ -19,6 +19,11 @@ from app.domain.search.schemas import (
     CurrentActor,
     SearchActivityItemRead,
     SearchActivityResponse,
+    SearchDebugCandidateRead,
+    SearchDebugQueryRead,
+    SearchDebugRankingRead,
+    SearchDebugResponse,
+    SearchDebugStructuredQueryRead,
     SearchHistoryResponse,
     SearchMeta,
     SearchRequest,
@@ -227,6 +232,174 @@ class SearchService:
             organization_id=actor.organization_id,
         )
 
+    @staticmethod
+    def _serialize_structured_query(structured_query) -> SearchDebugStructuredQueryRead:
+        return SearchDebugStructuredQueryRead(
+            normalized_text=structured_query.normalized_text,
+            text_terms=structured_query.text_terms,
+            lemma_terms=structured_query.lemma_terms,
+            brand_terms=structured_query.brand_terms,
+            model_terms=structured_query.model_terms,
+            code_terms=structured_query.code_terms,
+            numeric_terms=structured_query.numeric_terms,
+            unit_terms=structured_query.unit_terms,
+            size_terms=structured_query.size_terms,
+            package_terms=structured_query.package_terms,
+            color_terms=structured_query.color_terms,
+            material_terms=structured_query.material_terms,
+            category_hints=structured_query.category_hints,
+            attribute_terms=structured_query.attribute_terms,
+            quantity_constraints=[
+                constraint.normalized for constraint in structured_query.quantity_constraints
+            ],
+            is_hard_query=structured_query.is_hard_query,
+        )
+
+    def _prepare_search_execution(
+        self,
+        payload: SearchRequest,
+        actor: CurrentActor,
+    ) -> dict:
+        normalized_query, corrected_query, correction_type = self._resolve_query(payload.query)
+        effective_query = corrected_query or normalized_query
+        structured_query = analyze_search_text(effective_query)
+        original_query_terms = extract_query_terms(normalized_query)
+        query_terms = extract_query_terms(effective_query)
+        expanded_query_terms = expand_term_variants(query_terms)
+        expanded_original_query_terms = (
+            []
+            if original_query_terms == query_terms
+            else expand_term_variants(original_query_terms)
+        )
+        synonym_lookup_terms = list(
+            dict.fromkeys(
+                [
+                    *original_query_terms,
+                    *query_terms,
+                    *expanded_original_query_terms,
+                    *expanded_query_terms,
+                ]
+            )
+        )
+        synonym_expansions = self.search_repository.get_synonym_expansions(synonym_lookup_terms)
+        applied_synonyms = list(
+            dict.fromkeys(item.synonym for item in synonym_expansions if item.synonym)
+        )
+        synonym_terms: list[str] = []
+        for synonym in applied_synonyms:
+            synonym_terms.extend(expand_term_variants(extract_query_terms(synonym)))
+        synonym_sources = {
+            item.synonym: item.source
+            for item in synonym_expansions
+            if item.synonym
+        }
+        synonym_confidence = {
+            item.synonym: item.weight
+            for item in synonym_expansions
+            if item.synonym
+        }
+        search_terms = list(
+            dict.fromkeys(
+                [
+                    normalized_query,
+                    effective_query,
+                    *original_query_terms,
+                    *query_terms,
+                    *expanded_original_query_terms,
+                    *expanded_query_terms,
+                ]
+            )
+        )
+        morphology_query_terms = self._build_morphology_terms(
+            original_query_terms,
+            query_terms,
+            expanded_original_query_terms,
+            expanded_query_terms,
+            structured_query.category_hints,
+            structured_query.attribute_terms,
+        )
+        synonym_query_terms = list(dict.fromkeys([*applied_synonyms, *synonym_terms]))
+        fuzzy_search_terms = self._build_fuzzy_retrieval_terms(
+            base_terms=[
+                *original_query_terms,
+                *query_terms,
+                *expanded_original_query_terms,
+                *expanded_query_terms,
+            ],
+            blocked_terms=search_terms,
+        )
+        semantic_query_texts = self._build_semantic_query_texts(
+            effective_query,
+            normalized_query,
+            extra_values=applied_synonyms,
+        )
+        ranking_query_terms = list(
+            dict.fromkeys([*expanded_query_terms, *morphology_query_terms, *synonym_terms])
+        )
+        profile = self._get_profile_for_actor(actor)
+
+        items = self.catalog_service.search_ste_candidates(
+            query_terms=search_terms,
+            morphology_query_terms=morphology_query_terms,
+            fuzzy_query_terms=fuzzy_search_terms,
+            synonym_query_terms=synonym_query_terms,
+            semantic_query_texts=semantic_query_texts,
+            structured_query=structured_query,
+            strict_match=payload.filters.strict_match,
+            category_id=payload.filters.category_id,
+            supplier_id=payload.filters.supplier_id,
+        )
+        raw_candidates_count = len(items)
+        candidates = [
+            build_candidate(
+                item=item,
+                normalized_query=effective_query,
+                profile=profile,
+                query_terms=ranking_query_terms,
+                retrieval_score=item.retrieval_score,
+                retrieval_reasons=item.retrieval_reasons,
+                retrieval_channel_scores=item.retrieval_channel_scores,
+                retrieval_channel_ranks=item.retrieval_channel_ranks,
+                retrieval_features=item.retrieval_features,
+            )
+            for item in items
+        ]
+        candidates = [candidate for candidate in candidates if candidate.score > 0]
+        ranked_items = self.ranking_provider.rank(
+            RankingRequest(
+                query=RankingQueryContext(
+                    original=payload.query,
+                    normalized=normalized_query,
+                    corrected=corrected_query,
+                    applied_synonyms=applied_synonyms,
+                ),
+                actor=actor,
+                profile=profile,
+                candidates=candidates,
+            )
+        )
+
+        return {
+            "normalized_query": normalized_query,
+            "effective_query": effective_query,
+            "corrected_query": corrected_query,
+            "correction_type": correction_type,
+            "structured_query": structured_query,
+            "applied_synonyms": applied_synonyms,
+            "synonym_sources": synonym_sources,
+            "synonym_confidence": synonym_confidence,
+            "search_terms": search_terms,
+            "morphology_query_terms": morphology_query_terms,
+            "synonym_query_terms": synonym_query_terms,
+            "fuzzy_search_terms": fuzzy_search_terms,
+            "semantic_query_texts": semantic_query_texts,
+            "ranking_query_terms": ranking_query_terms,
+            "profile": profile,
+            "candidates": candidates,
+            "ranked_items": ranked_items,
+            "raw_candidates_count": raw_candidates_count,
+        }
+
     def _build_fuzzy_retrieval_terms(
         self,
         *,
@@ -349,90 +522,13 @@ class SearchService:
         payload: SearchRequest,
         actor: CurrentActor,
     ) -> SearchResponse:
-        normalized_query, corrected_query, correction_type = self._resolve_query(payload.query)
-        effective_query = corrected_query or normalized_query
-        structured_query = analyze_search_text(effective_query)
-        original_query_terms = extract_query_terms(normalized_query)
-        query_terms = extract_query_terms(effective_query)
-        expanded_query_terms = expand_term_variants(query_terms)
-        expanded_original_query_terms = (
-            []
-            if original_query_terms == query_terms
-            else expand_term_variants(original_query_terms)
-        )
-        synonym_lookup_terms = list(
-            dict.fromkeys(
-                [
-                    *original_query_terms,
-                    *query_terms,
-                    *expanded_original_query_terms,
-                    *expanded_query_terms,
-                ]
-            )
-        )
-        synonym_expansions = self.search_repository.get_synonym_expansions(synonym_lookup_terms)
-        applied_synonyms = list(
-            dict.fromkeys(item.synonym for item in synonym_expansions if item.synonym)
-        )
-        synonym_terms: list[str] = []
-        for synonym in applied_synonyms:
-            synonym_terms.extend(expand_term_variants(extract_query_terms(synonym)))
-        synonym_sources = {
-            item.synonym: item.source
-            for item in synonym_expansions
-            if item.synonym
-        }
-        synonym_confidence = {
-            item.synonym: item.weight
-            for item in synonym_expansions
-            if item.synonym
-        }
-        search_terms = list(
-            dict.fromkeys(
-                [
-                    normalized_query,
-                    effective_query,
-                    *original_query_terms,
-                    *query_terms,
-                    *expanded_original_query_terms,
-                    *expanded_query_terms,
-                ]
-            )
-        )
-        morphology_query_terms = self._build_morphology_terms(
-            original_query_terms,
-            query_terms,
-            expanded_original_query_terms,
-            expanded_query_terms,
-            structured_query.category_hints,
-            structured_query.attribute_terms,
-        )
-        synonym_query_terms = list(dict.fromkeys([*applied_synonyms, *synonym_terms]))
-        fuzzy_search_terms = self._build_fuzzy_retrieval_terms(
-            base_terms=[
-                *original_query_terms,
-                *query_terms,
-                *expanded_original_query_terms,
-                *expanded_query_terms,
-            ],
-            blocked_terms=search_terms,
-        )
-        semantic_query_texts = self._build_semantic_query_texts(
-            effective_query,
-            normalized_query,
-            extra_values=applied_synonyms,
-        )
-        ranking_query_terms = list(
-            dict.fromkeys([*expanded_query_terms, *morphology_query_terms, *synonym_terms])
-        )
-
-        profile = self._get_profile_for_actor(actor)
+        prepared = self._prepare_search_execution(payload, actor)
 
         session = self.search_repository.create_session(
             user_id=actor.user_id,
             organization_id=actor.organization_id,
             query=payload.query,
-            normalized_query=effective_query,
+            normalized_query=prepared["effective_query"],
         )
         self.event_service.create_system_event(
             session_id=session.id,
@@ -442,68 +538,28 @@ class SearchService:
             event_type="search_submitted",
             payload={
                 "query": payload.query,
-                "normalized_query": effective_query,
-                "corrected_query": corrected_query or "",
-                "correction_type": correction_type,
-                "synonyms_count": len(applied_synonyms),
+                "normalized_query": prepared["effective_query"],
+                "corrected_query": prepared["corrected_query"] or "",
+                "correction_type": prepared["correction_type"],
+                "synonyms_count": len(prepared["applied_synonyms"]),
             },
-        )
-        items = self.catalog_service.search_ste_candidates(
-            query_terms=search_terms,
-            morphology_query_terms=morphology_query_terms,
-            fuzzy_query_terms=fuzzy_search_terms,
-            synonym_query_terms=synonym_query_terms,
-            semantic_query_texts=semantic_query_texts,
-            structured_query=structured_query,
-            strict_match=payload.filters.strict_match,
-            category_id=payload.filters.category_id,
-            supplier_id=payload.filters.supplier_id,
-        )
-        candidates = [
-            build_candidate(
-                item=item,
-                normalized_query=effective_query,
-                profile=profile,
-                query_terms=ranking_query_terms,
-                retrieval_score=item.retrieval_score,
-                retrieval_reasons=item.retrieval_reasons,
-                retrieval_channel_scores=item.retrieval_channel_scores,
-                retrieval_channel_ranks=item.retrieval_channel_ranks,
-                retrieval_features=item.retrieval_features,
-            )
-            for item in items
-        ]
-
-        candidates = [candidate for candidate in candidates if candidate.score > 0]
-        ranked_items = self.ranking_provider.rank(
-            RankingRequest(
-                query=RankingQueryContext(
-                    original=payload.query,
-                    normalized=normalized_query,
-                    corrected=corrected_query,
-                    applied_synonyms=applied_synonyms,
-                ),
-                actor=actor,
-                profile=profile,
-                candidates=candidates,
-            )
         )
 
         return SearchResponse(
-            items=ranked_items,
+            items=prepared["ranked_items"],
             meta=SearchMeta(
                 session_id=session.id,
                 query=payload.query,
-                normalized_query=normalized_query,
-                corrected_query=corrected_query,
-                applied_synonyms=applied_synonyms,
-                synonym_sources=synonym_sources,
-                synonym_confidence=synonym_confidence,
+                normalized_query=prepared["normalized_query"],
+                corrected_query=prepared["corrected_query"],
+                applied_synonyms=prepared["applied_synonyms"],
+                synonym_sources=prepared["synonym_sources"],
+                synonym_confidence=prepared["synonym_confidence"],
                 explanations=self._build_explanations(
-                    corrected_query=corrected_query,
-                    normalized_query=normalized_query,
-                    applied_synonyms=applied_synonyms,
-                    profile=profile,
+                    corrected_query=prepared["corrected_query"],
+                    normalized_query=prepared["normalized_query"],
+                    applied_synonyms=prepared["applied_synonyms"],
+                    profile=prepared["profile"],
                 ),
                 ranking_mode=settings.ranking_mode,
             ),
@@ -700,6 +756,89 @@ class SearchService:
                 )
                 for item in sessions
             ]
+        )
+
+    def debug_search_ranking(
+        self,
+        payload: SearchRequest,
+        actor: CurrentActor,
+    ) -> SearchDebugResponse:
+        prepared = self._prepare_search_execution(payload, actor)
+        ranked_items = prepared["ranked_items"]
+        baseline_candidates = prepared["candidates"]
+        baseline_rank_by_id = {
+            item.id: index for index, item in enumerate(baseline_candidates, start=1)
+        }
+        final_rank_by_id = {
+            item.id: index for index, item in enumerate(ranked_items, start=1)
+        }
+        final_items_by_id = {item.id: item for item in ranked_items}
+        provider_name = self.ranking_provider.__class__.__name__
+        provider_mode = settings.ranking_provider
+        provider_ready = bool(getattr(self.ranking_provider, "ready", True))
+        model_type = getattr(self.ranking_provider, "model_type", None)
+        ml_rerank_applied = any("ml_rerank" in item.reasons for item in ranked_items)
+
+        candidates = [
+            SearchDebugCandidateRead(
+                id=item.id,
+                title=item.title,
+                category=item.category,
+                supplier=item.supplier,
+                category_id=item.category_id,
+                supplier_id=item.supplier_id,
+                status=item.status,
+                baseline_score=item.baseline_score,
+                retrieval_score=item.retrieval_score,
+                final_score=final_items_by_id.get(item.id, item).score,
+                score_delta=round(
+                    float(final_items_by_id.get(item.id, item).score - item.baseline_score),
+                    4,
+                ),
+                baseline_rank=baseline_rank_by_id[item.id],
+                final_rank=final_rank_by_id.get(item.id, baseline_rank_by_id[item.id]),
+                baseline_reasons=item.reasons,
+                final_reasons=final_items_by_id.get(item.id, item).reasons,
+                retrieval_reasons=item.retrieval_reasons,
+                retrieval_channel_scores=item.retrieval_channel_scores,
+                retrieval_channel_ranks=item.retrieval_channel_ranks,
+                retrieval_features=item.retrieval_features,
+            )
+            for item in baseline_candidates
+        ]
+        candidates.sort(key=lambda item: item.final_rank)
+
+        return SearchDebugResponse(
+            query=SearchDebugQueryRead(
+                original=payload.query,
+                normalized=prepared["normalized_query"],
+                effective=prepared["effective_query"],
+                corrected=prepared["corrected_query"],
+                correction_type=prepared["correction_type"],
+                filters=payload.filters,
+                applied_synonyms=prepared["applied_synonyms"],
+                synonym_sources=prepared["synonym_sources"],
+                synonym_confidence=prepared["synonym_confidence"],
+                search_terms=prepared["search_terms"],
+                morphology_terms=prepared["morphology_query_terms"],
+                synonym_terms=prepared["synonym_query_terms"],
+                fuzzy_terms=prepared["fuzzy_search_terms"],
+                semantic_query_texts=prepared["semantic_query_texts"],
+                ranking_query_terms=prepared["ranking_query_terms"],
+                structured_query=self._serialize_structured_query(prepared["structured_query"]),
+            ),
+            profile=prepared["profile"],
+            ranking=SearchDebugRankingRead(
+                provider_name=provider_name,
+                provider_mode=provider_mode,
+                provider_ready=provider_ready,
+                model_type=model_type,
+                ml_rerank_applied=ml_rerank_applied,
+                fallback_to_baseline=provider_mode != "noop" and not ml_rerank_applied,
+                raw_candidates_count=prepared["raw_candidates_count"],
+                scored_candidates_count=len(baseline_candidates),
+            ),
+            candidates=candidates,
         )
 
     def get_recent_activity(

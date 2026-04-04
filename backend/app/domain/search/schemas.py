@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.domain.personalization.schemas import SearchProfileRead
+
 
 class CurrentActor(BaseModel):
     user_id: str
@@ -106,6 +108,84 @@ class SearchActivityItemRead(BaseModel):
 
 class SearchActivityResponse(BaseModel):
     items: list[SearchActivityItemRead] = Field(default_factory=list)
+
+
+class SearchDebugStructuredQueryRead(BaseModel):
+    normalized_text: str
+    text_terms: list[str] = Field(default_factory=list)
+    lemma_terms: list[str] = Field(default_factory=list)
+    brand_terms: list[str] = Field(default_factory=list)
+    model_terms: list[str] = Field(default_factory=list)
+    code_terms: list[str] = Field(default_factory=list)
+    numeric_terms: list[str] = Field(default_factory=list)
+    unit_terms: list[str] = Field(default_factory=list)
+    size_terms: list[str] = Field(default_factory=list)
+    package_terms: list[str] = Field(default_factory=list)
+    color_terms: list[str] = Field(default_factory=list)
+    material_terms: list[str] = Field(default_factory=list)
+    category_hints: list[str] = Field(default_factory=list)
+    attribute_terms: list[str] = Field(default_factory=list)
+    quantity_constraints: list[str] = Field(default_factory=list)
+    is_hard_query: bool = False
+
+
+class SearchDebugQueryRead(BaseModel):
+    original: str
+    normalized: str
+    effective: str
+    corrected: str | None = None
+    correction_type: str = "none"
+    filters: SearchFilters = Field(default_factory=SearchFilters)
+    applied_synonyms: list[str] = Field(default_factory=list)
+    synonym_sources: dict[str, str] = Field(default_factory=dict)
+    synonym_confidence: dict[str, float] = Field(default_factory=dict)
+    search_terms: list[str] = Field(default_factory=list)
+    morphology_terms: list[str] = Field(default_factory=list)
+    synonym_terms: list[str] = Field(default_factory=list)
+    fuzzy_terms: list[str] = Field(default_factory=list)
+    semantic_query_texts: list[str] = Field(default_factory=list)
+    ranking_query_terms: list[str] = Field(default_factory=list)
+    structured_query: SearchDebugStructuredQueryRead
+
+
+class SearchDebugCandidateRead(BaseModel):
+    id: str
+    title: str
+    category: str
+    supplier: str
+    category_id: str
+    supplier_id: str
+    status: str
+    baseline_score: float
+    retrieval_score: float
+    final_score: float
+    score_delta: float
+    baseline_rank: int
+    final_rank: int
+    baseline_reasons: list[str] = Field(default_factory=list)
+    final_reasons: list[str] = Field(default_factory=list)
+    retrieval_reasons: list[str] = Field(default_factory=list)
+    retrieval_channel_scores: dict[str, float] = Field(default_factory=dict)
+    retrieval_channel_ranks: dict[str, int] = Field(default_factory=dict)
+    retrieval_features: dict[str, float] = Field(default_factory=dict)
+
+
+class SearchDebugRankingRead(BaseModel):
+    provider_name: str
+    provider_mode: str
+    provider_ready: bool = True
+    model_type: str | None = None
+    ml_rerank_applied: bool = False
+    fallback_to_baseline: bool = False
+    raw_candidates_count: int = 0
+    scored_candidates_count: int = 0
+
+
+class SearchDebugResponse(BaseModel):
+    query: SearchDebugQueryRead
+    profile: SearchProfileRead
+    ranking: SearchDebugRankingRead
+    candidates: list[SearchDebugCandidateRead] = Field(default_factory=list)
 
 
 class SpellcheckResponse(BaseModel):
