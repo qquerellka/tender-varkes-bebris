@@ -29,6 +29,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Если backend-код менялся, запускай именно с `--build`: контейнер backend собирается в image и не монтирует `./backend` как live volume.
+
 После запуска:
 - frontend: `http://localhost:3000`
 - backend: `http://localhost:8000`
@@ -45,12 +47,25 @@ docker compose up --build
 - основной режим ранжирования для локальной отладки: `RANKING_MODE=retrieval_only`
 - semantic retrieval можно отключить через `SEARCH_SEMANTIC_BACKEND=disabled`
 - search index сохраняется на диск и переиспользуется между рестартами контейнера
+- search warmup строит документы для индекса потоково из БД, а не через полный список ORM-объектов
+- после построения retrieval index backend освобождает build-only токены и вспомогательные структуры, чтобы снизить steady-state RAM
 
 В `.env.example` выставлены dev-safe лимиты импорта:
 - `PORTAL_IMPORT_STE_LIMIT=10000`
 - `PORTAL_IMPORT_CONTRACT_LIMIT=10000`
 
 Это нужно, чтобы первый импорт и warmup были предсказуемыми на локальной машине. Для полного каталога увеличь лимиты или поставь `0`.
+
+Если во время `docker compose up --build` всё ещё не хватает памяти, начни с ограниченного импорта:
+
+```bash
+PORTAL_IMPORT_STE_LIMIT=100000
+PORTAL_IMPORT_CONTRACT_LIMIT=100000
+SEARCH_SEMANTIC_BACKEND=disabled
+docker compose up --build
+```
+
+После успешного первого старта можно постепенно повышать лимиты и использовать сохранённый search index cache.
 
 ## Что изменилось в поиске
 
