@@ -8,6 +8,9 @@ class DemoUserRead(BaseModel):
     organization_name: str
     role: str
     persona: str
+    entry_mode: str = "empty"
+    has_history: bool = False
+    entry_note: str | None = None
 
 
 class DemoLoginRequest(BaseModel):
@@ -20,4 +23,7 @@ class AuthSessionRead(BaseModel):
     organization_id: str
     organization_name: str
     role: str
+    entry_mode: str = "empty"
+    has_history: bool = False
+    entry_note: str | None = None
     persona: str | None = None

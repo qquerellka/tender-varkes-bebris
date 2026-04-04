@@ -1,9 +1,9 @@
+from app.auth.demo import ensure_demo_profiles
 from sqlalchemy.orm import Session
 
 from app.db.models import (
     CategoryModel,
     OrgSearchProfileModel,
-    OrganizationModel,
     PurchaseHistoryModel,
     SearchEventModel,
     SearchSessionModel,
@@ -11,7 +11,6 @@ from app.db.models import (
     SpellCorrectionModel,
     SupplierModel,
     SynonymModel,
-    UserModel,
     UserSearchProfileModel,
 )
 
@@ -23,11 +22,11 @@ def _merge_all(session: Session, rows: list[object]) -> None:
 
 
 def seed_demo_data(session: Session) -> None:
+    ensure_demo_profiles(session)
+
     _merge_all(
         session,
         [
-            OrganizationModel(id="org_1", name="Демо-организация"),
-            OrganizationModel(id="org_2", name="Департамент цифровых сервисов"),
             CategoryModel(id="cat_transport", name="Транспорт"),
             CategoryModel(id="cat_it", name="ИТ и оборудование"),
             CategoryModel(id="cat_service", name="Услуги"),
@@ -42,18 +41,6 @@ def seed_demo_data(session: Session) -> None:
     _merge_all(
         session,
         [
-            UserModel(
-                id="user_1",
-                organization_id="org_1",
-                name="Демо-пользователь",
-                role="customer",
-            ),
-            UserModel(
-                id="user_2",
-                organization_id="org_2",
-                name="Специалист закупок",
-                role="customer",
-            ),
             STEItemModel(
                 id="ste_101",
                 title="Аренда автобуса для перевозки детей",
@@ -293,8 +280,8 @@ def seed_demo_data(session: Session) -> None:
         session,
         [
             UserSearchProfileModel(
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 top_categories_json=["Транспорт", "Услуги", "Офис и снабжение"],
                 recent_ste_ids_json=["ste_101", "ste_108", "ste_111"],
                 top_suppliers_json=['ООО "Городской транспорт"', 'ООО "Сервис плюс"'],
@@ -308,8 +295,8 @@ def seed_demo_data(session: Session) -> None:
                 ],
             ),
             UserSearchProfileModel(
-                user_id="user_2",
-                organization_id="org_2",
+                user_id="demo_customer_it",
+                organization_id="demo_org_it",
                 top_categories_json=["ИТ и оборудование", "Услуги"],
                 recent_ste_ids_json=["ste_102", "ste_106", "ste_109"],
                 top_suppliers_json=['ООО "ИнфоСистемы"', 'ООО "Сервис плюс"'],
@@ -322,67 +309,67 @@ def seed_demo_data(session: Session) -> None:
                 ],
             ),
             OrgSearchProfileModel(
-                organization_id="org_1",
+                organization_id="demo_org_transport",
                 top_categories_json=["Транспорт", "Услуги", "Офис и снабжение"],
                 popular_ste_ids_json=["ste_101", "ste_108", "ste_104", "ste_111", "ste_107"],
             ),
             OrgSearchProfileModel(
-                organization_id="org_2",
+                organization_id="demo_org_it",
                 top_categories_json=["ИТ и оборудование", "Услуги"],
                 popular_ste_ids_json=["ste_102", "ste_106", "ste_105", "ste_109", "ste_110"],
             ),
             PurchaseHistoryModel(
                 id="ph_1",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 ste_id="ste_101",
                 quantity="2",
                 price="320000",
             ),
             PurchaseHistoryModel(
                 id="ph_2",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 ste_id="ste_108",
                 quantity="1",
                 price="180000",
             ),
             PurchaseHistoryModel(
                 id="ph_3",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 ste_id="ste_111",
                 quantity="12",
                 price="540000",
             ),
             PurchaseHistoryModel(
                 id="ph_4",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 ste_id="ste_107",
                 quantity="30",
                 price="125000",
             ),
             PurchaseHistoryModel(
                 id="ph_5",
-                user_id="user_2",
-                organization_id="org_2",
+                user_id="demo_customer_it",
+                organization_id="demo_org_it",
                 ste_id="ste_102",
                 quantity="4",
                 price="2450000",
             ),
             PurchaseHistoryModel(
                 id="ph_6",
-                user_id="user_2",
-                organization_id="org_2",
+                user_id="demo_customer_it",
+                organization_id="demo_org_it",
                 ste_id="ste_106",
                 quantity="1",
                 price="610000",
             ),
             PurchaseHistoryModel(
                 id="ph_7",
-                user_id="user_2",
-                organization_id="org_2",
+                user_id="demo_customer_it",
+                organization_id="demo_org_it",
                 ste_id="ste_109",
                 quantity="2",
                 price="1760000",
@@ -395,29 +382,29 @@ def seed_demo_data(session: Session) -> None:
         [
             SearchSessionModel(
                 id="session_1",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 query="автобус для детей",
                 normalized_query="автобус для детей",
             ),
             SearchSessionModel(
                 id="session_2",
-                user_id="user_2",
-                organization_id="org_2",
+                user_id="demo_customer_it",
+                organization_id="demo_org_it",
                 query="сервер",
                 normalized_query="сервер",
             ),
             SearchSessionModel(
                 id="session_3",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 query="клининг",
                 normalized_query="клининг",
             ),
             SearchSessionModel(
                 id="session_4",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 query="бумага",
                 normalized_query="бумага",
             ),
@@ -430,8 +417,8 @@ def seed_demo_data(session: Session) -> None:
             SearchEventModel(
                 id="event_seed_1",
                 session_id="session_1",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 event_type="result_clicked",
                 ste_id="ste_101",
                 payload_json={"position": 1},
@@ -439,8 +426,8 @@ def seed_demo_data(session: Session) -> None:
             SearchEventModel(
                 id="event_seed_2",
                 session_id="session_1",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 event_type="favorite_added",
                 ste_id="ste_108",
                 payload_json={"source": "search"},
@@ -448,8 +435,8 @@ def seed_demo_data(session: Session) -> None:
             SearchEventModel(
                 id="event_seed_3",
                 session_id="session_2",
-                user_id="user_2",
-                organization_id="org_2",
+                user_id="demo_customer_it",
+                organization_id="demo_org_it",
                 event_type="result_opened",
                 ste_id="ste_102",
                 payload_json={"position": 1},
@@ -457,8 +444,8 @@ def seed_demo_data(session: Session) -> None:
             SearchEventModel(
                 id="event_seed_4",
                 session_id="session_3",
-                user_id="user_1",
-                organization_id="org_1",
+                user_id="demo_customer_transport",
+                organization_id="demo_org_transport",
                 event_type="result_clicked",
                 ste_id="ste_111",
                 payload_json={"position": 1},

@@ -1,4 +1,5 @@
 import {
+  AppstoreOutlined,
   ArrowLeftOutlined,
   DeleteOutlined,
   ShoppingCartOutlined,
@@ -145,6 +146,132 @@ const HeroActions = styled.div`
   gap: 10px;
 `
 
+const EmptyState = styled.div`
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+`
+
+const EmptyText = styled.span`
+  color: #64748a;
+  font-size: 14px;
+  line-height: 1.5;
+`
+
+const EmptyActions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+`
+
+type CartStarterScenario = {
+  key: string
+  title: string
+  description: string
+  query: string
+  categoryId?: string
+}
+
+function buildCartStarterScenarios(
+  role: string | null | undefined,
+  persona: string | null | undefined,
+): CartStarterScenario[] {
+  const normalizedPersona = persona?.toLowerCase() ?? ''
+
+  if (role === 'supplier') {
+    if (normalizedPersona.includes('ит')) {
+      return [
+        {
+          key: 'supplier-it-server',
+          title: 'Спрос на серверы',
+          description: 'Открывает каталог по серверному сегменту и помогает быстро собрать shortlist.',
+          query: 'сервер',
+          categoryId: 'cat_it',
+        },
+        {
+          key: 'supplier-it-network',
+          title: 'Сетевое оборудование',
+          description: 'Подходит для первого конкурентного сценария по смежным позициям.',
+          query: 'коммутатор',
+          categoryId: 'cat_it',
+        },
+      ]
+    }
+
+    return [
+      {
+        key: 'supplier-transport-bus',
+        title: 'Автобусные закупки',
+        description: 'Стартовый транспортный сценарий для наполнения shortlist и черновика.',
+        query: 'автобус',
+        categoryId: 'cat_transport',
+      },
+      {
+        key: 'supplier-transport-children',
+        title: 'Перевозка детей',
+        description: 'Узкий кейс, который быстро показывает релевантные позиции.',
+        query: 'перевозка детей',
+        categoryId: 'cat_transport',
+      },
+    ]
+  }
+
+  if (normalizedPersona.includes('ит')) {
+    return [
+      {
+        key: 'customer-it-server',
+        title: 'Серверное оборудование',
+        description: 'Быстрый старт по типовой ИТ-закупке.',
+        query: 'сервер',
+        categoryId: 'cat_it',
+      },
+      {
+        key: 'customer-it-laptop',
+        title: 'Рабочие станции',
+        description: 'Подходит для наполнения черновика товарами рабочего места.',
+        query: 'ноутбук',
+        categoryId: 'cat_it',
+      },
+    ]
+  }
+
+  if (normalizedPersona.includes('офис') || normalizedPersona.includes('канцел')) {
+    return [
+      {
+        key: 'customer-office-paper',
+        title: 'Бумага и расходники',
+        description: 'Открывает типовой офисный сценарий с быстрым наполнением корзины.',
+        query: 'бумага',
+        categoryId: 'cat_office',
+      },
+      {
+        key: 'customer-office-print',
+        title: 'Печать и картриджи',
+        description: 'Помогает собрать черновик по оргтехнике и расходникам.',
+        query: 'картридж',
+        categoryId: 'cat_office',
+      },
+    ]
+  }
+
+  return [
+    {
+      key: 'customer-transport-bus',
+      title: 'Автобусные услуги',
+      description: 'Стартовый сценарий для быстрого наполнения корзины и сравнения.',
+      query: 'автобус',
+      categoryId: 'cat_transport',
+    },
+    {
+      key: 'customer-social-service',
+      title: 'Сервисные услуги',
+      description: 'Альтернативный сценарий, если нужен сервисный контур вместо товаров.',
+      query: 'сопровождение',
+      categoryId: 'cat_service',
+    },
+  ]
+}
+
 function CartPage() {
   const session = readStoredSession()
   const navigate = useNavigate()
@@ -265,6 +392,7 @@ function CartPage() {
   const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0)
   const uniqueCategories = new Set(items.map((item) => item.item.category_name)).size
   const uniqueSuppliers = new Set(items.map((item) => item.item.supplier_name)).size
+  const starterScenarios = buildCartStarterScenarios(session?.role, session?.persona)
 
   if (!session) {
     return <Navigate to="/" replace />
@@ -274,6 +402,20 @@ function CartPage() {
   const handleLogout = () => {
     clearStoredSession()
     navigate('/', { replace: true })
+  }
+
+  const openStarterScenario = (scenario: CartStarterScenario) => {
+    navigate('/', {
+      state: {
+        starterScenario: {
+          key: scenario.key,
+          title: scenario.title,
+          description: scenario.description,
+          query: scenario.query,
+          categoryId: scenario.categoryId,
+        },
+      },
+    })
   }
 
   return (
@@ -403,7 +545,29 @@ function CartPage() {
               ))}
             </CartList>
           ) : (
-            <Empty description="Черновик закупки пуст. Добавьте позиции из каталога или карточки товара." />
+            <EmptyState>
+              <Empty description="Черновик закупки пуст. Добавьте позиции из каталога или карточки товара." />
+              <EmptyText>
+                {session.entry_mode === 'empty' || session.entry_mode === 'context'
+                  ? 'Для нового кабинета проще всего начать с готового сценария: откройте каталог, добавьте несколько позиций и вернитесь сюда для оформления черновика.'
+                  : 'Откройте каталог, найдите нужные позиции и соберите здесь рабочий черновик закупки.'}
+              </EmptyText>
+              <EmptyActions>
+                <Button icon={<AppstoreOutlined />} onClick={() => navigate('/')}>
+                  Перейти в каталог
+                </Button>
+                {starterScenarios.map((scenario) => (
+                  <Button
+                    key={scenario.key}
+                    type="primary"
+                    ghost
+                    onClick={() => openStarterScenario(scenario)}
+                  >
+                    {scenario.title}
+                  </Button>
+                ))}
+              </EmptyActions>
+            </EmptyState>
           )}
         </SectionCard>
       </Main>

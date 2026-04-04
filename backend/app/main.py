@@ -40,11 +40,21 @@ def _is_search_stack_ready() -> bool:
 def _warmup_search_stack() -> None:
     app.state.search_warmup = "running"
     app.state.ranking_warmup = "running"
+    app.state.search_warmup_error = None
+    app.state.ranking_warmup_error = None
+    app.state.search_documents_count = None
+    app.state.semantic_backend = None
+    app.state.semantic_faiss_enabled = None
+    app.state.ranking_provider_name = None
+    app.state.ranking_provider_mode = settings.ranking_provider
 
     try:
         with SessionLocal() as session:
             search_repository = SearchRepository(session)
             index = search_repository._get_hybrid_index()
+            app.state.search_documents_count = len(index.documents)
+            app.state.semantic_backend = index._semantic_backend
+            app.state.semantic_faiss_enabled = index._semantic_faiss_index is not None
             logger.info(
                 "Search warmup complete: semantic_backend=%s faiss_enabled=%s documents=%s",
                 index._semantic_backend,
@@ -54,10 +64,12 @@ def _warmup_search_stack() -> None:
             app.state.search_warmup = "ready"
     except Exception as exc:
         app.state.search_warmup = "failed"
+        app.state.search_warmup_error = str(exc)
         logger.warning("Search warmup failed: %s", exc)
 
     try:
         ranking_provider = get_ranking_provider()
+        app.state.ranking_provider_name = ranking_provider.__class__.__name__
         logger.info(
             "Ranking provider warmup complete: provider=%s",
             ranking_provider.__class__.__name__,
@@ -65,6 +77,7 @@ def _warmup_search_stack() -> None:
         app.state.ranking_warmup = "ready"
     except Exception as exc:
         app.state.ranking_warmup = "failed"
+        app.state.ranking_warmup_error = str(exc)
         logger.warning("Ranking provider warmup failed: %s", exc)
 
 
@@ -72,6 +85,13 @@ def _warmup_search_stack() -> None:
 def schedule_warmup_search_stack() -> None:
     app.state.search_warmup = "pending"
     app.state.ranking_warmup = "pending"
+    app.state.search_warmup_error = None
+    app.state.ranking_warmup_error = None
+    app.state.search_documents_count = None
+    app.state.semantic_backend = None
+    app.state.semantic_faiss_enabled = None
+    app.state.ranking_provider_name = None
+    app.state.ranking_provider_mode = settings.ranking_provider
     threading.Thread(target=_warmup_search_stack, daemon=True).start()
     logger.info("Background warmup scheduled")
 

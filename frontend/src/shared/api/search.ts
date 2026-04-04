@@ -17,6 +17,9 @@ export type DemoUser = {
   organization_name: string
   role: string
   persona: string
+  entry_mode?: string
+  has_history?: boolean
+  entry_note?: string | null
 }
 
 export type AuthSession = {
@@ -25,6 +28,9 @@ export type AuthSession = {
   organization_id: string
   organization_name: string
   role: string
+  entry_mode?: string
+  has_history?: boolean
+  entry_note?: string | null
   persona?: string | null
 }
 
@@ -60,6 +66,23 @@ export type SearchHistoryItem = {
 
 export type SearchHistoryResponse = {
   items: SearchHistoryItem[]
+}
+
+export type SearchActivityItem = {
+  id: string
+  session_id: string
+  event_type: SearchEventType | string
+  title: string
+  description: string
+  ste_id?: string | null
+  ste_title?: string | null
+  page_type?: string | null
+  query?: string | null
+  created_at: string
+}
+
+export type SearchActivityResponse = {
+  items: SearchActivityItem[]
 }
 
 export type SearchSuggestion = {
@@ -288,6 +311,19 @@ export type TelemetryHealth = {
   event_counts: TelemetryCountByType[]
 }
 
+export type SearchStackStatus = {
+  ready: boolean
+  search_warmup: string
+  ranking_warmup: string
+  ranking_provider?: string | null
+  ranking_provider_mode?: string | null
+  search_documents_count?: number | null
+  semantic_backend?: string | null
+  semantic_faiss_enabled?: boolean | null
+  search_warmup_error?: string | null
+  ranking_warmup_error?: string | null
+}
+
 export type SearchEventType =
   | 'search_submitted'
   | 'search_results_rendered'
@@ -368,6 +404,17 @@ export async function getSearchHistory(actor: ActorContext): Promise<SearchHisto
     '/api/v1/search/history',
     buildActorConfig(actor),
   )
+  return data
+}
+
+export async function getSearchActivity(
+  actor: ActorContext,
+  limit = 12,
+): Promise<SearchActivityResponse> {
+  const { data } = await api.get<SearchActivityResponse>('/api/v1/search/activity', {
+    ...buildActorConfig(actor),
+    params: { limit },
+  })
   return data
 }
 
@@ -670,6 +717,17 @@ export async function getTelemetryHealth(payload: {
       ...buildActorConfig(actor),
       params,
     },
+  )
+  return data
+}
+
+export async function getSearchStackStatus(payload: {
+  actor: ActorContext
+}): Promise<SearchStackStatus> {
+  const { actor } = payload
+  const { data } = await api.get<SearchStackStatus>(
+    '/api/v1/debug/search-stack',
+    buildActorConfig(actor),
   )
   return data
 }

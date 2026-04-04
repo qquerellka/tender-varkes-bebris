@@ -4,6 +4,8 @@ export type DemoUser = {
   organizationName: string
   role: string
   persona: string
+  hasHistory?: boolean
+  entryNote?: string | null
 }
 
 export const demoUsers: DemoUser[] = [

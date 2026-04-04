@@ -25,8 +25,14 @@ import {
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
+import {
+  activityFilterOptions,
+  getActivityColor,
+  getActivityFilterKey,
+  type ActivityFilter,
+} from '@entities/search/lib/activity'
 import { buildAutocompleteOptions, formatSearchReason } from '@entities/search/lib/formatters'
 import {
   addCartItem,
@@ -36,6 +42,7 @@ import {
   createSearchImpressions,
   getCartItems,
   getCategories,
+  getSearchActivity,
   getCatalogFeed,
   getCatalogSummary,
   getComparisonItems,
@@ -62,6 +69,7 @@ import {
   type FavoriteItem,
   type PurchaseHistoryItem,
   type SearchHistoryItem,
+  type SearchActivityItem,
   type SearchProfileResponse,
   type SearchResponse,
   type SupplierInsightsResponse,
@@ -87,6 +95,14 @@ const FAVORITES_PAGE_SIZE = 8
 
 type WorkspaceTab = 'catalog' | 'favorites' | 'compare'
 type SortMode = 'relevance' | 'title_asc' | 'supplier_asc'
+type StarterScenario = {
+  key: string
+  title: string
+  description: string
+  query: string
+  categoryId?: string
+  strictMatch?: boolean
+}
 
 type SearchState =
   | { kind: 'idle' }
@@ -135,6 +151,216 @@ function formatDateTime(value: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+function buildStarterScenarios(session: AuthSession): StarterScenario[] {
+  const persona = session.persona?.toLowerCase() ?? ''
+
+  if (session.role === 'supplier') {
+    if (persona.includes('ит')) {
+      return [
+        {
+          key: 'supplier-it-server',
+          title: 'Спрос на серверы',
+          description: 'Проверьте конкурентную выдачу и активный спрос по серверной категории.',
+          query: 'сервер',
+          categoryId: 'cat_it',
+        },
+        {
+          key: 'supplier-it-network',
+          title: 'Сетевое оборудование',
+          description: 'Посмотрите, как в каталоге выглядят смежные позиции и поставщики.',
+          query: 'коммутатор',
+          categoryId: 'cat_it',
+        },
+        {
+          key: 'supplier-it-support',
+          title: 'Сервисный сегмент',
+          description: 'Откройте рынок сопровождения и сравните сервисные предложения.',
+          query: 'техническая поддержка',
+          categoryId: 'cat_service',
+        },
+      ]
+    }
+
+    if (persona.includes('офис') || persona.includes('канцел')) {
+      return [
+        {
+          key: 'supplier-office-paper',
+          title: 'Канцелярский спрос',
+          description: 'Быстрый вход в сегмент бумаги, расходников и типовых офисных закупок.',
+          query: 'бумага',
+          categoryId: 'cat_office',
+        },
+        {
+          key: 'supplier-office-furniture',
+          title: 'Офисная мебель',
+          description: 'Проверьте мебельный сегмент и предложения по оснащению рабочих мест.',
+          query: 'офисная мебель',
+          categoryId: 'cat_office',
+        },
+        {
+          key: 'supplier-office-print',
+          title: 'Расходники для печати',
+          description: 'Посмотрите выдачу по картриджам и оргтехнике без ручной настройки.',
+          query: 'картридж',
+          categoryId: 'cat_office',
+        },
+      ]
+    }
+
+    if (persona.includes('услуг') || persona.includes('сопровожд')) {
+      return [
+        {
+          key: 'supplier-service-support',
+          title: 'Сопровождение систем',
+          description: 'Откройте сегмент сопровождения и эксплуатации услуг.',
+          query: 'сопровождение системы',
+          categoryId: 'cat_service',
+        },
+        {
+          key: 'supplier-service-cleaning',
+          title: 'Клининг и facility',
+          description: 'Быстрый просмотр категории регулярных сервисных контрактов.',
+          query: 'клининг',
+          categoryId: 'cat_service',
+        },
+        {
+          key: 'supplier-service-office',
+          title: 'Офисные услуги',
+          description: 'Проверьте смежную выдачу по поддержке офисной инфраструктуры.',
+          query: 'обслуживание офиса',
+          categoryId: 'cat_service',
+        },
+      ]
+    }
+
+    return [
+      {
+        key: 'supplier-transport-bus',
+        title: 'Рынок автобусных закупок',
+        description: 'Стартовый запрос по основному сегменту пассажирского транспорта.',
+        query: 'автобус',
+        categoryId: 'cat_transport',
+      },
+      {
+        key: 'supplier-transport-children',
+        title: 'Перевозка детей',
+        description: 'Показывает более узкий закупочный кейс с понятной конкуренцией.',
+        query: 'перевозка детей',
+        categoryId: 'cat_transport',
+      },
+      {
+        key: 'supplier-transport-microbus',
+        title: 'Микроавтобусы',
+        description: 'Откройте смежный транспортный сегмент без ручного фильтра.',
+        query: 'микроавтобус',
+        categoryId: 'cat_transport',
+      },
+    ]
+  }
+
+  if (persona.includes('ит')) {
+    return [
+      {
+        key: 'customer-it-server',
+        title: 'Серверное оборудование',
+        description: 'Начните с типовой ИТ-закупки и сразу получите предметную выдачу.',
+        query: 'сервер',
+        categoryId: 'cat_it',
+      },
+      {
+        key: 'customer-it-laptop',
+        title: 'Рабочие станции',
+        description: 'Быстрый сценарий для закупки ноутбуков и техники рабочих мест.',
+        query: 'ноутбук',
+        categoryId: 'cat_it',
+      },
+      {
+        key: 'customer-it-support',
+        title: 'Поддержка инфраструктуры',
+        description: 'Откройте сервисный сценарий по сопровождению и эксплуатации ИТ.',
+        query: 'обслуживание серверов',
+        categoryId: 'cat_service',
+      },
+    ]
+  }
+
+  if (persona.includes('соц') || persona.includes('услуг')) {
+    return [
+      {
+        key: 'customer-social-service',
+        title: 'Услуги сопровождения',
+        description: 'Подходит для старта нового кабинета без поисковой истории.',
+        query: 'сопровождение',
+        categoryId: 'cat_service',
+      },
+      {
+        key: 'customer-social-cleaning',
+        title: 'Клининг помещений',
+        description: 'Быстрый сценарий по регулярным услугам и facility-контексту.',
+        query: 'клининг',
+        categoryId: 'cat_service',
+      },
+      {
+        key: 'customer-social-office',
+        title: 'Офисное снабжение',
+        description: 'Смежный сценарий для расходников и обеспечения рабочих мест.',
+        query: 'бумага',
+        categoryId: 'cat_office',
+      },
+    ]
+  }
+
+  if (persona.includes('офис') || persona.includes('канцел')) {
+    return [
+      {
+        key: 'customer-office-paper',
+        title: 'Бумага и расходники',
+        description: 'Запускает первый сценарий закупки по офисному снабжению.',
+        query: 'бумага',
+        categoryId: 'cat_office',
+      },
+      {
+        key: 'customer-office-furniture',
+        title: 'Мебель для рабочих мест',
+        description: 'Подбирает мебельный сегмент и смежные позиции каталога.',
+        query: 'офисные кресла',
+        categoryId: 'cat_office',
+      },
+      {
+        key: 'customer-office-print',
+        title: 'Печать и картриджи',
+        description: 'Стартовый сценарий по оргтехнике и расходным материалам.',
+        query: 'картридж',
+        categoryId: 'cat_office',
+      },
+    ]
+  }
+
+  return [
+    {
+      key: 'customer-transport-bus',
+      title: 'Автобусные услуги',
+      description: 'Запускает понятный транспортный кейс и сразу показывает выдачу.',
+      query: 'автобус',
+      categoryId: 'cat_transport',
+    },
+    {
+      key: 'customer-transport-children',
+      title: 'Перевозка детей',
+      description: 'Более узкий закупочный сценарий с хорошей демонстрацией поиска.',
+      query: 'перевозка детей',
+      categoryId: 'cat_transport',
+    },
+    {
+      key: 'customer-transport-office',
+      title: 'Офисное снабжение',
+      description: 'Смежный сценарий, если хотите быстро наполнить профиль сигналами.',
+      query: 'бумага',
+      categoryId: 'cat_office',
+    },
+  ]
 }
 
 function buildCardTone(id: string) {
@@ -322,6 +548,152 @@ const SearchMetaRow = styled.div`
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+`
+
+const OnboardingStrip = styled.section`
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 18px 20px;
+  border: 1px solid #d9e0e8;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(244, 248, 253, 0.98) 100%);
+  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
+`
+
+const OnboardingHeader = styled.div`
+  display: grid;
+  gap: 6px;
+`
+
+const OnboardingTitle = styled.span`
+  color: #2a3c56;
+  font-size: 20px;
+  font-weight: 800;
+`
+
+const OnboardingText = styled.span`
+  color: #5f7085;
+  font-size: 14px;
+  line-height: 1.5;
+`
+
+const OnboardingGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+
+  @media (max-width: 1100px) {
+    grid-template-columns: 1fr;
+  }
+`
+
+const OnboardingCard = styled.button`
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #dbe4ed;
+  color: #273a53;
+  font: inherit;
+  text-align: left;
+  background: #fff;
+  cursor: pointer;
+
+  &:hover {
+    border-color: #2f4f84;
+    background: #f7fbff;
+  }
+`
+
+const OnboardingCardTitle = styled.span`
+  color: #2b4365;
+  font-size: 15px;
+  font-weight: 800;
+`
+
+const OnboardingCardText = styled.span`
+  color: #66778c;
+  font-size: 13px;
+  line-height: 1.45;
+`
+
+const OnboardingCardAction = styled.span`
+  color: #2f4f84;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+`
+
+const CollectionEmptyState = styled.div`
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+`
+
+const CollectionEmptyText = styled.span`
+  color: #64748a;
+  font-size: 14px;
+  line-height: 1.5;
+`
+
+const CollectionActionRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+`
+
+const HintPanel = styled.div`
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #dde6ef;
+  background: #fbfcfe;
+`
+
+const HintText = styled.span`
+  color: #64748a;
+  font-size: 14px;
+  line-height: 1.5;
+`
+
+const ActivityTimeline = styled.div`
+  display: grid;
+  gap: 12px;
+`
+
+const ActivityCard = styled.div`
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid #dde6ef;
+  background: #fbfcfe;
+`
+
+const ActivityTop = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+`
+
+const ActivityMeta = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+`
+
+const ActivityTitle = styled.span`
+  color: #2b3f5d;
+  font-size: 14px;
+  font-weight: 700;
+`
+
+const ActivityText = styled.span`
+  color: #64748a;
+  font-size: 13px;
+  line-height: 1.5;
 `
 
 const SearchMetaGroup = styled.div`
@@ -881,6 +1253,21 @@ const LoginRole = styled.span<{ $role: string }>`
   background: ${({ $role }) => ($role === 'supplier' ? '#fff1e4' : '#edf4ff')};
 `
 
+const LoginState = styled.span<{ $mode: string }>`
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 4px 10px;
+  color: ${({ $mode }) =>
+    $mode === 'history' ? '#0f5c38' : $mode === 'context' ? '#24467a' : '#6b4b16'};
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: ${({ $mode }) =>
+    $mode === 'history' ? '#e8f7ef' : $mode === 'context' ? '#edf4ff' : '#fff4df'};
+`
+
 const LoginHintList = styled.div`
   display: grid;
   gap: 10px;
@@ -973,27 +1360,47 @@ function LoginScreen({ onLogin }: { onLogin: (value: AuthSession) => void }) {
               <Skeleton active paragraph={{ rows: 6 }} />
             ) : (
               <LoginCards>
-                {(demoUsersQuery.data ?? []).map((user) => (
-                  <LoginCard
-                    key={user.id}
-                    type="button"
-                    $active={user.id === effectiveSelectedUserId}
-                    onClick={() => setSelectedUserId(user.id)}
-                  >
-                    <LoginRole $role={user.role}>
-                      {user.role === 'supplier' ? 'Поставщик' : 'Заказчик'}
-                    </LoginRole>
-                    <Typography.Title level={4} style={{ margin: 0 }}>
-                      {user.name}
-                    </Typography.Title>
-                    <Typography.Text style={{ color: '#5c6e84' }}>
-                      {user.organization_name}
-                    </Typography.Text>
-                    <Typography.Text style={{ color: '#6f7d8e' }}>
-                      {user.persona}
-                    </Typography.Text>
-                  </LoginCard>
-                ))}
+                {(demoUsersQuery.data ?? []).map((user) => {
+                  const entryMode = user.entry_mode ?? (user.has_history ? 'history' : 'empty')
+                  const entryLabel =
+                    entryMode === 'history'
+                      ? 'С историей'
+                      : entryMode === 'context'
+                        ? 'С контекстом'
+                        : 'Пустой кабинет'
+
+                  return (
+                    <LoginCard
+                      key={user.id}
+                      type="button"
+                      $active={user.id === effectiveSelectedUserId}
+                      onClick={() => setSelectedUserId(user.id)}
+                    >
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <LoginRole $role={user.role}>
+                          {user.role === 'supplier' ? 'Поставщик' : 'Заказчик'}
+                        </LoginRole>
+                        <LoginState $mode={entryMode}>
+                          {entryLabel}
+                        </LoginState>
+                      </div>
+                      <Typography.Title level={4} style={{ margin: 0 }}>
+                        {user.name}
+                      </Typography.Title>
+                      <Typography.Text style={{ color: '#5c6e84' }}>
+                        {user.organization_name}
+                      </Typography.Text>
+                      <Typography.Text style={{ color: '#6f7d8e' }}>
+                        {user.persona}
+                      </Typography.Text>
+                      {user.entry_note ? (
+                        <Typography.Text style={{ color: '#8a97a8', fontSize: 13 }}>
+                          {user.entry_note}
+                        </Typography.Text>
+                      ) : null}
+                    </LoginCard>
+                  )
+                })}
               </LoginCards>
             )}
 
@@ -1025,6 +1432,7 @@ function Workspace({
   session: AuthSession
   onLogout: () => void
 }) {
+  const location = useLocation()
   const navigate = useNavigate()
   const actor = useMemo<ActorContext>(() => ({ userId: session.user_id }), [session.user_id])
   const queryClient = useQueryClient()
@@ -1037,6 +1445,7 @@ function Workspace({
     const stored = readStoredValue(STORAGE_KEYS.sort)
     return stored === 'title_asc' || stored === 'supplier_asc' ? stored : 'relevance'
   })
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all')
   const [searchState, setSearchState] = useState<SearchState>({ kind: 'idle' })
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('catalog')
   const [catalogPage, setCatalogPage] = useState(1)
@@ -1101,6 +1510,10 @@ function Workspace({
     queryKey: ['search-history', session.user_id],
     queryFn: () => getSearchHistory(actor),
   })
+  const activityQuery = useQuery({
+    queryKey: ['search-activity', session.user_id],
+    queryFn: () => getSearchActivity(actor, 12),
+  })
 
   const profileQuery = useQuery<SearchProfileResponse>({
     queryKey: ['search-profile', session.user_id],
@@ -1164,6 +1577,28 @@ function Workspace({
   const topResultCategories = [...resultCategoryCounts.entries()]
     .sort((left, right) => right[1] - left[1])
     .slice(0, 5)
+  const starterScenarios = useMemo(() => buildStarterScenarios(session), [session])
+  const hasProfileSignals = Boolean(
+    (profileQuery.data?.top_categories.length ?? 0) ||
+      (profileQuery.data?.recent_ste_ids.length ?? 0) ||
+      (profileQuery.data?.top_suppliers.length ?? 0) ||
+      (profileQuery.data?.popular_queries.length ?? 0) ||
+      (profileQuery.data?.active_signals.length ?? 0),
+  )
+  const hasPurchaseHistory = Boolean((purchaseHistoryQuery.data ?? []).length)
+  const hasSearchHistory = Boolean((historyQuery.data?.items ?? []).length)
+  const showOnboardingStrip =
+    (session.entry_mode === 'empty' || session.entry_mode === 'context') &&
+    activeTab === 'catalog' &&
+    searchState.kind !== 'results'
+  const collectionStarterScenarios = starterScenarios.slice(0, 3)
+  const filteredActivityItems = useMemo(
+    () =>
+      (activityQuery.data?.items ?? []).filter(
+        (item) => activityFilter === 'all' || getActivityFilterKey(item.event_type) === activityFilter,
+      ),
+    [activityFilter, activityQuery.data?.items],
+  )
 
   function markSessionInteraction(sessionId: string | null) {
     if (!sessionId) {
@@ -1251,8 +1686,16 @@ function Workspace({
   async function runSearch(
     nextQuery?: string,
     eventMeta?: { type: 'suggestion_clicked'; label: string; source: string },
+    overrides?: {
+      categoryId?: string
+      supplierId?: string
+      strictMatch?: boolean
+    },
   ) {
     const query = (nextQuery ?? searchValue).trim()
+    const effectiveCategoryId = (overrides?.categoryId ?? selectedCategoryId) || undefined
+    const effectiveSupplierId = (overrides?.supplierId ?? selectedSupplierId) || undefined
+    const effectiveStrictMatch = overrides?.strictMatch ?? strictMatch
     if (!query) {
       setSearchState({ kind: 'idle' })
       setCatalogPage(1)
@@ -1296,9 +1739,9 @@ function Workspace({
       const response = await searchCatalog({
         query,
         filters: {
-          strict_match: strictMatch,
-          category_id: selectedCategoryId || undefined,
-          supplier_id: selectedSupplierId || undefined,
+          strict_match: effectiveStrictMatch,
+          category_id: effectiveCategoryId,
+          supplier_id: effectiveSupplierId,
         },
         actor,
       })
@@ -1333,9 +1776,9 @@ function Workspace({
         results_page: 1,
         payload: {
           results_count: response.items.length,
-          category_id: selectedCategoryId || '',
-          supplier_id: selectedSupplierId || '',
-          strict_match: strictMatch,
+          category_id: effectiveCategoryId || '',
+          supplier_id: effectiveSupplierId || '',
+          strict_match: effectiveStrictMatch,
           top_ste_ids: response.items.slice(0, 10).map((item) => item.id).join(','),
         },
         actor,
@@ -1359,6 +1802,39 @@ function Workspace({
         message: error instanceof Error ? error.message : 'Не удалось выполнить поиск',
       })
     }
+  }
+
+  async function applyStarterScenario(scenario: StarterScenario) {
+    setSearchValue(scenario.query)
+    setSelectedCategoryId(scenario.categoryId ?? '')
+    setSelectedSupplierId('')
+    setStrictMatch(Boolean(scenario.strictMatch))
+    setActiveTab('catalog')
+    setCatalogPage(1)
+    await runSearch(scenario.query, undefined, {
+      categoryId: scenario.categoryId,
+      supplierId: undefined,
+      strictMatch: scenario.strictMatch,
+    })
+  }
+
+  useEffect(() => {
+    const starterScenario = (
+      location.state as { starterScenario?: StarterScenario } | null
+    )?.starterScenario
+    if (!starterScenario) {
+      return
+    }
+
+    void applyStarterScenario(starterScenario).finally(() => {
+      navigate(location.pathname, { replace: true, state: null })
+    })
+  }, [location.pathname, location.state, navigate])
+
+  function openCollectionStarterScenario(scenario: StarterScenario) {
+    setActiveTab('catalog')
+    setFavoritesPage(1)
+    void applyStarterScenario(scenario)
   }
 
   async function invalidateUserSignals() {
@@ -1882,6 +2358,39 @@ function Workspace({
           </SearchMetaRow>
         </SearchStrip>
 
+        {showOnboardingStrip ? (
+          <OnboardingStrip>
+            <OnboardingHeader>
+              <OnboardingTitle>
+                {session.role === 'supplier'
+                  ? 'Быстрый старт для кабинета поставщика'
+                  : 'Быстрый старт для нового кабинета'}
+              </OnboardingTitle>
+              <OnboardingText>
+                {session.entry_mode === 'context'
+                  ? 'Личный профиль еще пустой, но организационный контекст уже доступен. Начните с готового сценария и соберите первые сигналы в избранном, сравнении и корзине.'
+                  : 'История закупок и персональные сигналы пока не собраны. Запустите один из готовых сценариев, чтобы быстро наполнить кабинет полезным контекстом.'}
+              </OnboardingText>
+              {session.entry_note ? <OnboardingText>{session.entry_note}</OnboardingText> : null}
+            </OnboardingHeader>
+
+            <OnboardingGrid>
+              {starterScenarios.map((scenario) => (
+                <OnboardingCard
+                  key={scenario.key}
+                  type="button"
+                  onClick={() => void applyStarterScenario(scenario)}
+                >
+                  <Tag color="blue">Стартовый сценарий</Tag>
+                  <OnboardingCardTitle>{scenario.title}</OnboardingCardTitle>
+                  <OnboardingCardText>{scenario.description}</OnboardingCardText>
+                  <OnboardingCardAction>Открыть выдачу</OnboardingCardAction>
+                </OnboardingCard>
+              ))}
+            </OnboardingGrid>
+          </OnboardingStrip>
+        ) : null}
+
         <WorkspaceGrid>
           <Sidebar>
             <SidebarCard>
@@ -2052,6 +2561,21 @@ function Workspace({
                     profileQuery.data?.active_signals.map((item) => (
                       <SignalCard key={item}>{item}</SignalCard>
                     ))
+                  ) : session.entry_mode === 'empty' || session.entry_mode === 'context' ? (
+                    <>
+                      <SignalCard>
+                        Персонализация пока не накопила сигналы. Первый полезный контекст появится
+                        после поиска, открытия карточек и действий с избранным или корзиной.
+                      </SignalCard>
+                      {starterScenarios.slice(0, 2).map((scenario) => (
+                        <Button
+                          key={scenario.key}
+                          onClick={() => void applyStarterScenario(scenario)}
+                        >
+                          Запустить: {scenario.title}
+                        </Button>
+                      ))}
+                    </>
                   ) : (
                     <SignalCard>
                       Поиск пока использует базовый профиль пользователя. Откройте карточку,
@@ -2178,19 +2702,36 @@ function Workspace({
                       <SummaryLabel>Категорий в текущей выдаче</SummaryLabel>
                     </SummaryStat>
                   </SummaryGrid>
-                  <PurchaseList>
-                    {(purchaseHistoryQuery.data ?? []).slice(0, 4).map((item) => (
-                      <PurchaseCard key={item.id}>
-                        <PurchaseTitle>{item.title}</PurchaseTitle>
-                        <PurchaseMeta>
-                          {item.category_name} · {item.supplier_name}
-                        </PurchaseMeta>
-                        <PurchaseMeta>
-                          {formatPurchasePrice(item.price)} · {formatPurchaseDate(item.purchased_at)}
-                        </PurchaseMeta>
-                      </PurchaseCard>
-                    ))}
-                  </PurchaseList>
+                  {hasPurchaseHistory ? (
+                    <PurchaseList>
+                      {(purchaseHistoryQuery.data ?? []).slice(0, 4).map((item) => (
+                        <PurchaseCard key={item.id}>
+                          <PurchaseTitle>{item.title}</PurchaseTitle>
+                          <PurchaseMeta>
+                            {item.category_name} · {item.supplier_name}
+                          </PurchaseMeta>
+                          <PurchaseMeta>
+                            {formatPurchasePrice(item.price)} · {formatPurchaseDate(item.purchased_at)}
+                          </PurchaseMeta>
+                        </PurchaseCard>
+                      ))}
+                    </PurchaseList>
+                  ) : (
+                    <SignalList>
+                      <SignalCard>
+                        История закупок пока пуста. Используйте стартовые сценарии и добавляйте
+                        позиции в корзину, чтобы кабинет начал собирать рабочий контекст.
+                      </SignalCard>
+                      {starterScenarios.map((scenario) => (
+                        <Button
+                          key={scenario.key}
+                          onClick={() => void applyStarterScenario(scenario)}
+                        >
+                          {scenario.title}
+                        </Button>
+                      ))}
+                    </SignalList>
+                  )}
                 </>
               )}
             </SidebarCard>
@@ -2249,10 +2790,16 @@ function Workspace({
                     {activeTab === 'catalog'
                       ? searchState.kind === 'results'
                         ? `Запрос: ${searchState.response.meta.query}`
+                        : showOnboardingStrip && !hasProfileSignals
+                        ? 'Кабинет пока пустой: выберите стартовый сценарий выше или выполните первый поиск'
                         : 'Стартовая лента показывает персональные и популярные позиции каталога'
                       : activeTab === 'favorites'
-                      ? 'Позиции, которые пользователь отметил для быстрого возврата'
-                      : 'До 4 позиций для сравнения характеристик'}
+                      ? (favoritesQuery.data?.length ?? 0)
+                        ? 'Позиции, которые пользователь отметил для быстрого возврата'
+                        : 'Сохраните сюда позиции из каталога, чтобы быстро вернуться к ним позже'
+                      : visibleCompareItems.length
+                      ? 'До 4 позиций для сравнения характеристик'
+                      : 'Добавьте сюда 2-4 позиции из каталога, чтобы увидеть отличия по параметрам'}
                   </ContentHint>
                 </div>
 
@@ -2490,7 +3037,26 @@ function Workspace({
                   </CompareTable>
                 ) : (
                   <div style={{ padding: 28 }}>
-                    <Empty description="Добавьте товары в сравнение из результатов поиска." />
+                    <CollectionEmptyState>
+                      <Empty description="Добавьте товары в сравнение из результатов поиска." />
+                      <CollectionEmptyText>
+                        Сравнение собирается из карточек каталога. Откройте готовый сценарий,
+                        отметьте 2-4 позиции и вернитесь сюда для просмотра различий.
+                      </CollectionEmptyText>
+                      <CollectionActionRow>
+                        <Button onClick={() => setActiveTab('catalog')}>Открыть каталог</Button>
+                        {collectionStarterScenarios.slice(0, 2).map((scenario) => (
+                          <Button
+                            key={scenario.key}
+                            type="primary"
+                            ghost
+                            onClick={() => openCollectionStarterScenario(scenario)}
+                          >
+                            Сценарий: {scenario.title}
+                          </Button>
+                        ))}
+                      </CollectionActionRow>
+                    </CollectionEmptyState>
                   </div>
                 )
               ) : activeCollectionItems.length ? (
@@ -2524,13 +3090,33 @@ function Workspace({
                 </>
               ) : (
                 <div style={{ padding: 28 }}>
-                  <Empty
-                    description={
-                      activeTab === 'favorites'
-                        ? 'Пока нет избранных позиций.'
-                        : 'Пока нет позиций в этом разделе.'
-                    }
-                  />
+                  <CollectionEmptyState>
+                    <Empty
+                      description={
+                        activeTab === 'favorites'
+                          ? 'Пока нет избранных позиций.'
+                          : 'Пока нет позиций в этом разделе.'
+                      }
+                    />
+                    <CollectionEmptyText>
+                      {activeTab === 'favorites'
+                        ? 'Избранное помогает быстро собирать shortlist. Добавьте сюда позиции из каталога или из стартового сценария.'
+                        : 'Раздел пока пуст. Откройте каталог и начните с готового сценария, чтобы наполнить его полезными позициями.'}
+                    </CollectionEmptyText>
+                    <CollectionActionRow>
+                      <Button onClick={() => setActiveTab('catalog')}>Перейти в каталог</Button>
+                      {collectionStarterScenarios.slice(0, 2).map((scenario) => (
+                        <Button
+                          key={scenario.key}
+                          type="primary"
+                          ghost
+                          onClick={() => openCollectionStarterScenario(scenario)}
+                        >
+                          Запустить: {scenario.title}
+                        </Button>
+                      ))}
+                    </CollectionActionRow>
+                  </CollectionEmptyState>
                 </div>
               )}
             </SectionCard>
@@ -2540,31 +3126,149 @@ function Workspace({
                 <div style={{ display: 'grid', gap: 4 }}>
                   <ContentTitle level={2}>Подсказки профиля</ContentTitle>
                   <ContentHint>
-                    Последние запросы и популярные категории для выбранного пользователя
+                    {hasProfileSignals || hasSearchHistory
+                      ? 'Последние запросы и популярные категории для выбранного пользователя'
+                      : 'Пока профиль пустой: здесь появятся ваши рабочие категории, запросы и быстрые возвраты'}
                   </ContentHint>
                 </div>
               </ContentHeader>
               <div style={{ padding: 20, display: 'grid', gap: 16 }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {(profileQuery.data?.top_categories ?? []).slice(0, 8).map((item) => (
-                    <Tag key={item} color="processing">
-                      {item}
-                    </Tag>
-                  ))}
+                {hasProfileSignals || hasSearchHistory ? (
+                  <>
+                    <HintPanel>
+                      <HintText>
+                        {session.entry_mode === 'context'
+                          ? 'Организационный контекст уже влияет на выдачу. Новые запросы и действия помогут быстрее превратить его в персональный профиль.'
+                          : 'Этот блок собирает рабочий контекст пользователя: частые категории, повторяемые запросы и темы, к которым удобно возвращаться.'}
+                      </HintText>
+                      {session.entry_note ? <HintText>{session.entry_note}</HintText> : null}
+                    </HintPanel>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {(profileQuery.data?.top_categories ?? []).slice(0, 8).map((item) => (
+                        <Tag key={item} color="processing">
+                          {item}
+                        </Tag>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {(historyQuery.data?.items ?? []).slice(0, 6).map((item: SearchHistoryItem) => (
+                        <Button
+                          key={item.id}
+                          onClick={() => {
+                            setSearchValue(item.query)
+                            void runSearch(item.query)
+                          }}
+                        >
+                          {item.query}
+                        </Button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <HintPanel>
+                    <HintText>
+                      Профиль еще не накопил поисковые сигналы. После первых запросов здесь появятся
+                      категории, к которым пользователь чаще всего возвращается, и быстрые кнопки
+                      для повторного запуска полезных сценариев.
+                    </HintText>
+                    {session.entry_note ? <HintText>{session.entry_note}</HintText> : null}
+                    <CollectionActionRow>
+                      {collectionStarterScenarios.map((scenario) => (
+                        <Button
+                          key={scenario.key}
+                          type="primary"
+                          ghost
+                          onClick={() => openCollectionStarterScenario(scenario)}
+                        >
+                          Старт: {scenario.title}
+                        </Button>
+                      ))}
+                    </CollectionActionRow>
+                  </HintPanel>
+                )}
+              </div>
+            </SectionCard>
+
+            <SectionCard>
+              <ContentHeader>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <ContentTitle level={2}>Последние действия</ContentTitle>
+                  <ContentHint>
+                    Живая лента недавних поисковых и закупочных действий пользователя
+                  </ContentHint>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {(historyQuery.data?.items ?? []).slice(0, 6).map((item: SearchHistoryItem) => (
-                    <Button
-                      key={item.id}
-                      onClick={() => {
-                        setSearchValue(item.query)
-                        void runSearch(item.query)
-                      }}
-                    >
-                      {item.query}
-                    </Button>
-                  ))}
-                </div>
+                <Select
+                  size="middle"
+                  value={activityFilter}
+                  style={{ minWidth: 180 }}
+                  onChange={(value) => setActivityFilter(value as ActivityFilter)}
+                  options={activityFilterOptions}
+                />
+              </ContentHeader>
+              <div style={{ padding: 20, display: 'grid', gap: 16 }}>
+                {activityQuery.isLoading ? (
+                  <Skeleton active paragraph={{ rows: 5 }} />
+                ) : filteredActivityItems.length ? (
+                  <ActivityTimeline>
+                    {filteredActivityItems.map((item: SearchActivityItem) => (
+                      <ActivityCard key={item.id}>
+                        <ActivityTop>
+                          <ActivityTitle>{item.title}</ActivityTitle>
+                          <Typography.Text style={{ color: '#7a889b', fontSize: 12 }}>
+                            {formatDateTime(item.created_at)}
+                          </Typography.Text>
+                        </ActivityTop>
+                        <ActivityMeta>
+                          <Tag color={getActivityColor(item.event_type)}>{item.event_type}</Tag>
+                          {item.query ? <Tag>{item.query}</Tag> : null}
+                          {item.ste_title ? <Tag color="geekblue">{item.ste_title}</Tag> : null}
+                        </ActivityMeta>
+                        <ActivityText>{item.description}</ActivityText>
+                      </ActivityCard>
+                    ))}
+                  </ActivityTimeline>
+                ) : (activityQuery.data?.items ?? []).length ? (
+                  <HintPanel>
+                    <HintText>
+                      Для выбранного фильтра пока нет событий. Переключите тип действий или
+                      продолжите сценарий в каталоге, чтобы собрать новые сигналы.
+                    </HintText>
+                    <CollectionActionRow>
+                      <Button onClick={() => setActivityFilter('all')}>Показать все действия</Button>
+                      {collectionStarterScenarios.slice(0, 2).map((scenario) => (
+                        <Button
+                          key={scenario.key}
+                          type="primary"
+                          ghost
+                          onClick={() => openCollectionStarterScenario(scenario)}
+                        >
+                          Сценарий: {scenario.title}
+                        </Button>
+                      ))}
+                    </CollectionActionRow>
+                  </HintPanel>
+                ) : (
+                  <HintPanel>
+                    <HintText>
+                      История действий пока пуста. После первых поисков, открытий карточек,
+                      добавлений в избранное и корзину здесь появится живая лента поведения
+                      пользователя.
+                    </HintText>
+                    {session.entry_note ? <HintText>{session.entry_note}</HintText> : null}
+                    <CollectionActionRow>
+                      {collectionStarterScenarios.map((scenario) => (
+                        <Button
+                          key={scenario.key}
+                          type="primary"
+                          ghost
+                          onClick={() => openCollectionStarterScenario(scenario)}
+                        >
+                          Начать с: {scenario.title}
+                        </Button>
+                      ))}
+                    </CollectionActionRow>
+                  </HintPanel>
+                )}
               </div>
             </SectionCard>
           </Content>

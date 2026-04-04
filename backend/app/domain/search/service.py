@@ -1,5 +1,6 @@
 from app.core.config import settings
 from app.domain.catalog.service import CatalogService
+from app.domain.events.schemas import SearchEventRead
 from app.domain.events.service import EventService
 from app.domain.personalization.service import PersonalizationService
 from app.domain.search.normalizer import (
@@ -16,6 +17,8 @@ from app.domain.search.query_analysis import analyze_search_text
 from app.domain.search.ranking import build_candidate
 from app.domain.search.schemas import (
     CurrentActor,
+    SearchActivityItemRead,
+    SearchActivityResponse,
     SearchHistoryResponse,
     SearchMeta,
     SearchRequest,
@@ -31,6 +34,31 @@ from app.integrations.ml.base import RankingProvider, RankingQueryContext, Ranki
 
 
 class SearchService:
+    _activity_event_types = {
+        "search_submitted",
+        "search_results_rendered",
+        "suggestion_clicked",
+        "result_clicked",
+        "result_opened",
+        "result_opened_new_tab",
+        "item_copy",
+        "favorite_added",
+        "favorite_removed",
+        "comparison_added",
+        "comparison_removed",
+        "cart_added",
+        "cart_removed",
+        "cart_quantity_changed",
+        "filter_applied",
+        "filter_removed",
+        "filters_cleared",
+        "sort_changed",
+        "purchase_completed",
+        "search_refined",
+        "purchase_intent",
+        "irrelevant_marked",
+    }
+
     def __init__(
         self,
         catalog_service: CatalogService,
@@ -44,6 +72,148 @@ class SearchService:
         self.personalization_service = personalization_service
         self.search_repository = search_repository
         self.ranking_provider = ranking_provider
+
+    @staticmethod
+    def _format_query_label(query: str | None) -> str:
+        return f"«{query}»" if query else "без запроса"
+
+    @staticmethod
+    def _stringify_payload_value(value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "включено" if value else "выключено"
+        return str(value)
+
+    def _build_activity_item(
+        self,
+        *,
+        event: SearchEventRead,
+        session_queries: dict[str, str],
+        ste_titles: dict[str, str | None],
+    ) -> SearchActivityItemRead | None:
+        if event.event_type not in self._activity_event_types:
+            return None
+
+        query = event.query_text or event.normalized_query or session_queries.get(event.session_id)
+        ste_title = ste_titles.get(event.ste_id) if event.ste_id else None
+        subject = ste_title or event.ste_id or "позиция"
+        payload = event.payload or {}
+
+        title = "Недавнее действие"
+        description = "Действие зафиксировано в поисковой сессии пользователя."
+
+        if event.event_type == "search_submitted":
+            title = f"Новый запрос {self._format_query_label(query)}"
+            description = "Создана поисковая сессия и сохранен исходный поисковый запрос."
+        elif event.event_type == "search_results_rendered":
+            title = f"Получена выдача по запросу {self._format_query_label(query)}"
+            results_count = payload.get("results_count")
+            if results_count is not None:
+                description = f"В каталоге отрисовано {results_count} результатов для этого сценария."
+            else:
+                description = "Результаты поиска отрисованы в каталоге."
+        elif event.event_type == "search_refined":
+            next_query = self._stringify_payload_value(payload.get("next_query")) or query or "новый запрос"
+            title = "Запрос уточнен"
+            description = (
+                f"Пользователь перешел от {self._format_query_label(query)} "
+                f"к {self._format_query_label(next_query)}."
+            )
+        elif event.event_type == "suggestion_clicked":
+            label = self._stringify_payload_value(payload.get("label")) or query or "подсказка"
+            source = self._stringify_payload_value(payload.get("source"))
+            title = f"Выбрана подсказка {self._format_query_label(label)}"
+            description = (
+                f"Подсказка использована из блока {source}." if source else "Подсказка применена к поиску."
+            )
+        elif event.event_type == "result_clicked":
+            title = f"Открыт результат: {subject}"
+            description = (
+                f"Пользователь перешел к карточке из выдачи по запросу {self._format_query_label(query)}."
+                if query
+                else "Пользователь открыл карточку из поисковой выдачи."
+            )
+        elif event.event_type == "result_opened":
+            title = f"Карточка просмотрена: {subject}"
+            description = "Позиция открыта в основном потоке просмотра каталога."
+        elif event.event_type == "result_opened_new_tab":
+            title = f"Карточка открыта в новой вкладке: {subject}"
+            description = "Пользователь сохранил контекст выдачи и открыл позицию параллельно."
+        elif event.event_type == "item_copy":
+            copied_text = self._stringify_payload_value(payload.get("copied_text"))
+            title = f"Скопирован фрагмент карточки: {subject}"
+            description = (
+                f"С карточки скопирован текст: {copied_text}." if copied_text else "Пользователь скопировал часть описания позиции."
+            )
+        elif event.event_type == "favorite_added":
+            title = f"Добавлено в избранное: {subject}"
+            description = "Позиция закреплена в shortlist пользователя."
+        elif event.event_type == "favorite_removed":
+            title = f"Убрано из избранного: {subject}"
+            description = "Позиция больше не считается приоритетной в shortlist."
+        elif event.event_type == "comparison_added":
+            title = f"Добавлено в сравнение: {subject}"
+            description = "Позиция отправлена в compare-flow для сопоставления с альтернативами."
+        elif event.event_type == "comparison_removed":
+            title = f"Убрано из сравнения: {subject}"
+            description = "Позиция исключена из текущего compare-flow."
+        elif event.event_type == "cart_added":
+            quantity = self._stringify_payload_value(payload.get("quantity")) or "1"
+            title = f"Добавлено в корзину: {subject}"
+            description = f"Позиция вошла в закупочный черновик с количеством {quantity}."
+        elif event.event_type == "cart_removed":
+            title = f"Удалено из корзины: {subject}"
+            description = "Позиция удалена из закупочного черновика."
+        elif event.event_type == "cart_quantity_changed":
+            quantity = self._stringify_payload_value(payload.get("quantity")) or "1"
+            title = f"Изменено количество в корзине: {subject}"
+            description = f"В закупочном черновике установлено количество {quantity}."
+        elif event.event_type == "filter_applied":
+            filter_name = self._stringify_payload_value(payload.get("filter_name")) or "фильтр"
+            filter_value = self._stringify_payload_value(payload.get("filter_value")) or "значение"
+            title = "Применен фильтр"
+            description = f"Фильтр {filter_name} установлен в значение {self._format_query_label(filter_value)}."
+        elif event.event_type == "filter_removed":
+            filter_name = self._stringify_payload_value(payload.get("filter_name")) or "фильтр"
+            filter_value = self._stringify_payload_value(payload.get("filter_value"))
+            title = "Фильтр снят"
+            description = (
+                f"Убран фильтр {filter_name} со значением {self._format_query_label(filter_value)}."
+                if filter_value
+                else f"Убран фильтр {filter_name}."
+            )
+        elif event.event_type == "filters_cleared":
+            title = "Фильтры очищены"
+            description = "Пользователь вернулся к более широкому просмотру каталога без ограничений."
+        elif event.event_type == "sort_changed":
+            sort_mode = self._stringify_payload_value(payload.get("sort_mode")) or "relevance"
+            title = "Изменен режим сортировки"
+            description = f"Каталог переключен в режим сортировки {self._format_query_label(sort_mode)}."
+        elif event.event_type == "purchase_intent":
+            items_count = self._stringify_payload_value(payload.get("items_count")) or "0"
+            title = "Подготовлен закупочный черновик"
+            description = f"Пользователь перешел к оформлению черновика, позиций в подборке: {items_count}."
+        elif event.event_type == "purchase_completed":
+            quantity = self._stringify_payload_value(payload.get("quantity")) or "1"
+            title = f"Оформлена закупка: {subject}"
+            description = f"Позиция оформлена как закупка с количеством {quantity}."
+        elif event.event_type == "irrelevant_marked":
+            title = f"Позиция отмечена как нерелевантная: {subject}"
+            description = "Система получила негативный сигнал по этой карточке."
+
+        return SearchActivityItemRead(
+            id=event.id,
+            session_id=event.session_id,
+            event_type=event.event_type,
+            title=title,
+            description=description,
+            ste_id=event.ste_id,
+            ste_title=ste_title,
+            page_type=event.page_type,
+            query=query,
+            created_at=event.created_at,
+        )
 
     def _get_profile_for_actor(self, actor: CurrentActor):
         if not actor.personalization_enabled:
@@ -531,3 +701,43 @@ class SearchService:
                 for item in sessions
             ]
         )
+
+    def get_recent_activity(
+        self,
+        actor: CurrentActor,
+        limit: int = 20,
+    ) -> SearchActivityResponse:
+        if not actor.personalization_enabled:
+            return SearchActivityResponse(items=[])
+
+        events = self.event_service.list_events(
+            user_id=actor.user_id,
+            limit=max(limit * 4, 40),
+        ).items
+        sessions = self.search_repository.list_sessions(
+            user_id=actor.user_id,
+            organization_id=actor.organization_id,
+            limit=max(limit * 4, 40),
+        )
+        session_queries = {item.id: item.query for item in sessions}
+
+        ste_ids = [event.ste_id for event in events if event.ste_id]
+        ste_titles: dict[str, str | None] = {}
+        for ste_id in dict.fromkeys(ste_ids):
+            item = self.catalog_service.get_ste_by_id(ste_id)
+            ste_titles[ste_id] = item.title if item else None
+
+        activity_items: list[SearchActivityItemRead] = []
+        for event in events:
+            activity_item = self._build_activity_item(
+                event=event,
+                session_queries=session_queries,
+                ste_titles=ste_titles,
+            )
+            if activity_item is None:
+                continue
+            activity_items.append(activity_item)
+            if len(activity_items) >= limit:
+                break
+
+        return SearchActivityResponse(items=activity_items)

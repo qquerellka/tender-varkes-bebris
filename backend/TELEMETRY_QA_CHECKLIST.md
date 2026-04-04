@@ -5,6 +5,8 @@
 Проверка идёт через debug-ручки:
 - `GET /api/v1/debug/telemetry/events`
 - `GET /api/v1/debug/telemetry/impressions`
+- `GET /api/v1/debug/telemetry/health`
+- `GET /api/v1/debug/search-stack`
 
 Заголовок для demo-пользователя:
 
@@ -23,7 +25,7 @@ X-Demo-User-Id: <demo_user_id>
 
 ```bash
 export API_BASE="http://127.0.0.1:8000"
-export DEMO_USER_ID="demo_customer_office"
+export DEMO_USER_ID="demo_customer_transport"
 export SEARCH_SESSION_ID="<search_session_id>"
 ```
 
@@ -91,6 +93,8 @@ curl -sS \
 /api/v1/debug/telemetry/impressions?limit=20
 /api/v1/debug/telemetry/events?search_session_id=<session_id>&limit=50
 /api/v1/debug/telemetry/impressions?search_session_id=<session_id>&limit=50
+/api/v1/debug/telemetry/health
+/api/v1/debug/search-stack
 ```
 
 ## Сценарии

@@ -15,6 +15,9 @@ class DemoProfileDefinition:
     name: str
     role: str
     persona: str
+    entry_mode: str
+    has_history: bool
+    entry_note: str
 
 
 DEMO_PROFILE_DEFINITIONS: tuple[DemoProfileDefinition, ...] = (
@@ -25,6 +28,9 @@ DEMO_PROFILE_DEFINITIONS: tuple[DemoProfileDefinition, ...] = (
         name="Анна Прохорова",
         role="customer",
         persona="Транспорт и хозяйственное снабжение",
+        entry_mode="history",
+        has_history=True,
+        entry_note="Есть история закупок, поисковые сигналы и стартовая персонализация",
     ),
     DemoProfileDefinition(
         user_id="demo_customer_it",
@@ -33,22 +39,75 @@ DEMO_PROFILE_DEFINITIONS: tuple[DemoProfileDefinition, ...] = (
         name="Илья Назаров",
         role="customer",
         persona="ИТ-закупки и инфраструктура",
+        entry_mode="history",
+        has_history=True,
+        entry_note="Есть история закупок, поисковые сигналы и стартовая персонализация",
     ),
     DemoProfileDefinition(
-        user_id="demo_supplier_food",
-        organization_id="demo_org_supplier_food",
-        organization_name='ООО "Русский хлебозавод"',
+        user_id="demo_customer_office_new",
+        organization_id="demo_org_office_new",
+        organization_name="Городской центр административного обеспечения",
+        name="Ольга Ермакова",
+        role="customer",
+        persona="Новый заказчик по офису и канцелярии",
+        entry_mode="empty",
+        has_history=False,
+        entry_note="Новый пустой кабинет без истории и без сохраненных сигналов",
+    ),
+    DemoProfileDefinition(
+        user_id="demo_customer_social_new",
+        organization_id="demo_org_social_new",
+        organization_name="Центр социальных программ",
+        name="Павел Жаров",
+        role="customer",
+        persona="Новый заказчик по соцпроектам и услугам",
+        entry_mode="empty",
+        has_history=False,
+        entry_note="Новый пустой кабинет без истории и без сохраненных сигналов",
+    ),
+    DemoProfileDefinition(
+        user_id="demo_supplier_transport",
+        organization_id="demo_org_supplier_transport",
+        organization_name='ООО "Городской транспорт"',
         name="Марина Колосова",
         role="supplier",
-        persona="Поставщик продуктов и выпечки",
+        persona="Поставщик пассажирского транспорта и перевозок",
+        entry_mode="context",
+        has_history=False,
+        entry_note="Есть supplier-контекст по организации, но нет личной истории действий",
     ),
     DemoProfileDefinition(
-        user_id="demo_supplier_toys",
-        organization_id="demo_org_supplier_toys",
-        organization_name='ООО "Стеллар Трейд"',
+        user_id="demo_supplier_it",
+        organization_id="demo_org_supplier_it",
+        organization_name='ООО "ИнфоСистемы"',
         name="Виктор Проскурин",
         role="supplier",
-        persona="Поставщик детских товаров и сезонной продукции",
+        persona="Поставщик ИТ-оборудования и инфраструктуры",
+        entry_mode="context",
+        has_history=False,
+        entry_note="Есть supplier-контекст по организации, но нет личной истории действий",
+    ),
+    DemoProfileDefinition(
+        user_id="demo_supplier_office_new",
+        organization_id="demo_org_supplier_office_new",
+        organization_name='ООО "Новый офисный поставщик"',
+        name="Наталья Белова",
+        role="supplier",
+        persona="Новый поставщик мебели и канцелярии",
+        entry_mode="empty",
+        has_history=False,
+        entry_note="Новый пустой кабинет поставщика без истории и без сигналов",
+    ),
+    DemoProfileDefinition(
+        user_id="demo_supplier_services_new",
+        organization_id="demo_org_supplier_services_new",
+        organization_name='ООО "Городской сервисный партнер"',
+        name="Артем Климов",
+        role="supplier",
+        persona="Новый поставщик услуг и сопровождения",
+        entry_mode="empty",
+        has_history=False,
+        entry_note="Новый пустой кабинет поставщика без истории и без сигналов",
     ),
 )
 

@@ -8,7 +8,9 @@ import {
   getTelemetryEvents,
   getTelemetryHealth,
   getTelemetryImpressions,
+  getSearchStackStatus,
   type ActorContext,
+  type SearchStackStatus,
   type TelemetryEventList,
   type TelemetryHealth,
   type TelemetryImpressionList,
@@ -218,6 +220,12 @@ function TelemetryDebugPage() {
     enabled: isEnabled,
   })
 
+  const searchStackQuery = useQuery<SearchStackStatus>({
+    queryKey: ['debug-search-stack', userId, refreshNonce],
+    queryFn: () => getSearchStackStatus({ actor }),
+    enabled: isEnabled,
+  })
+
   if (!session) {
     return <Navigate to="/" replace />
   }
@@ -298,6 +306,59 @@ function TelemetryDebugPage() {
         </Hero>
 
         <Grid>
+          <SectionCard>
+            <SectionHeader>
+              <SectionTitle level={3}>Search Stack</SectionTitle>
+              <Tag color={searchStackQuery.data?.ready ? 'success' : 'warning'}>
+                {searchStackQuery.data?.ready ? 'ready' : 'not ready'}
+              </Tag>
+            </SectionHeader>
+
+            {searchStackQuery.isLoading ? (
+              <Skeleton active paragraph={{ rows: 4 }} />
+            ) : searchStackQuery.data ? (
+              <>
+                <SummaryGrid>
+                  <SummaryCard>
+                    <SummaryValue>{searchStackQuery.data.search_warmup}</SummaryValue>
+                    <SummaryLabel>Search warmup</SummaryLabel>
+                  </SummaryCard>
+                  <SummaryCard>
+                    <SummaryValue>{searchStackQuery.data.ranking_warmup}</SummaryValue>
+                    <SummaryLabel>Ranking warmup</SummaryLabel>
+                  </SummaryCard>
+                  <SummaryCard>
+                    <SummaryValue>{searchStackQuery.data.search_documents_count ?? 0}</SummaryValue>
+                    <SummaryLabel>Документов в индексе</SummaryLabel>
+                  </SummaryCard>
+                  <SummaryCard>
+                    <SummaryValue>{searchStackQuery.data.ranking_provider ?? 'unknown'}</SummaryValue>
+                    <SummaryLabel>Ranking provider</SummaryLabel>
+                  </SummaryCard>
+                </SummaryGrid>
+
+                <Meta>
+                  <span>provider mode: {searchStackQuery.data.ranking_provider_mode ?? 'unknown'}</span>
+                  <span>semantic backend: {searchStackQuery.data.semantic_backend ?? 'unknown'}</span>
+                  <span>
+                    faiss: {searchStackQuery.data.semantic_faiss_enabled ? 'enabled' : 'disabled'}
+                  </span>
+                </Meta>
+
+                {searchStackQuery.data.search_warmup_error || searchStackQuery.data.ranking_warmup_error ? (
+                  <Payload>
+                    {prettyJson({
+                      search_warmup_error: searchStackQuery.data.search_warmup_error,
+                      ranking_warmup_error: searchStackQuery.data.ranking_warmup_error,
+                    })}
+                  </Payload>
+                ) : null}
+              </>
+            ) : (
+              <Empty description="Состояние search stack пока недоступно." />
+            )}
+          </SectionCard>
+
           <SectionCard>
             <SectionHeader>
               <SectionTitle level={3}>Telemetry Health</SectionTitle>

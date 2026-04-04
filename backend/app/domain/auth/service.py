@@ -26,6 +26,9 @@ class AuthService:
                 organization_name=item.organization_name,
                 role=item.role,
                 persona=item.persona,
+                entry_mode=item.entry_mode,
+                has_history=item.has_history,
+                entry_note=item.entry_note,
             )
             for item in list_demo_profiles()
         ]
@@ -51,6 +54,9 @@ class AuthService:
             organization_id=user.organization_id,
             organization_name=user.organization.name,
             role=user.role,
+            entry_mode=definition.entry_mode,
+            has_history=definition.has_history,
+            entry_note=definition.entry_note,
             persona=definition.persona,
         )
 
@@ -63,5 +69,8 @@ class AuthService:
             organization_id=actor.organization_id,
             organization_name=actor.organization_name or actor.organization_id,
             role=actor.role,
+            entry_mode=definition.entry_mode if definition else "empty",
+            has_history=definition.has_history if definition else False,
+            entry_note=definition.entry_note if definition else None,
             persona=definition.persona if definition else None,
         )

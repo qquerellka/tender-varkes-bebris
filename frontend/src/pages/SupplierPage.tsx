@@ -4,19 +4,156 @@ import {
   RiseOutlined,
   ShoppingCartOutlined,
 } from '@ant-design/icons'
-import { Button, Empty, Skeleton, Tag, Typography } from 'antd'
+import { Button, Empty, Select, Skeleton, Tag, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
 import {
+  activityFilterOptions,
+  getActivityColor,
+  getActivityFilterKey,
+  type ActivityFilter,
+} from '@entities/search/lib/activity'
+import {
   getCatalogSummary,
+  getSearchActivity,
   getSupplierInsights,
   type ActorContext,
   type CatalogSummary,
+  type SearchActivityItem,
   type SupplierInsightsResponse,
 } from '@shared/api/search'
 import { clearStoredSession, readStoredSession } from '@shared/lib/portal-session'
 import PortalShell from '@widgets/portal-shell/PortalShell'
+
+type SupplierStarterScenario = {
+  key: string
+  title: string
+  description: string
+  query: string
+  categoryId?: string
+}
+
+function buildSupplierStarterScenarios(persona: string | null | undefined): SupplierStarterScenario[] {
+  const normalizedPersona = persona?.toLowerCase() ?? ''
+
+  if (normalizedPersona.includes('ит')) {
+    return [
+      {
+        key: 'supplier-it-server',
+        title: 'Спрос на серверы',
+        description: 'Откройте каталог сразу в серверном сегменте и посмотрите конкурентную выдачу.',
+        query: 'сервер',
+        categoryId: 'cat_it',
+      },
+      {
+        key: 'supplier-it-network',
+        title: 'Сетевое оборудование',
+        description: 'Быстрый вход в смежный рынок коммутаторов и инфраструктурных позиций.',
+        query: 'коммутатор',
+        categoryId: 'cat_it',
+      },
+      {
+        key: 'supplier-it-support',
+        title: 'Сервисное сопровождение',
+        description: 'Показывает услуги поддержки и эксплуатационный контекст по вашему сегменту.',
+        query: 'техническая поддержка',
+        categoryId: 'cat_service',
+      },
+    ]
+  }
+
+  if (normalizedPersona.includes('офис') || normalizedPersona.includes('канцел')) {
+    return [
+      {
+        key: 'supplier-office-paper',
+        title: 'Канцелярский спрос',
+        description: 'Запускает выдачу по бумаге и расходникам для офисного снабжения.',
+        query: 'бумага',
+        categoryId: 'cat_office',
+      },
+      {
+        key: 'supplier-office-furniture',
+        title: 'Офисная мебель',
+        description: 'Проверяет смежный сегмент мебели и оснащения рабочих мест.',
+        query: 'офисная мебель',
+        categoryId: 'cat_office',
+      },
+      {
+        key: 'supplier-office-print',
+        title: 'Печать и расходники',
+        description: 'Открывает карточный сегмент картриджей и печатной инфраструктуры.',
+        query: 'картридж',
+        categoryId: 'cat_office',
+      },
+    ]
+  }
+
+  if (normalizedPersona.includes('услуг') || normalizedPersona.includes('сопровожд')) {
+    return [
+      {
+        key: 'supplier-service-support',
+        title: 'Сопровождение систем',
+        description: 'Быстрый старт по сервисным закупкам и сопровождению.',
+        query: 'сопровождение системы',
+        categoryId: 'cat_service',
+      },
+      {
+        key: 'supplier-service-cleaning',
+        title: 'Клининг и facility',
+        description: 'Показывает спрос на регулярные сервисные контракты.',
+        query: 'клининг',
+        categoryId: 'cat_service',
+      },
+      {
+        key: 'supplier-service-office',
+        title: 'Офисные услуги',
+        description: 'Открывает смежный контур по поддержке и эксплуатации помещений.',
+        query: 'обслуживание офиса',
+        categoryId: 'cat_service',
+      },
+    ]
+  }
+
+  return [
+    {
+      key: 'supplier-transport-bus',
+      title: 'Автобусные закупки',
+      description: 'Стартовый сценарий по пассажирскому транспорту и типовой конкурентной выдаче.',
+      query: 'автобус',
+      categoryId: 'cat_transport',
+    },
+    {
+      key: 'supplier-transport-children',
+      title: 'Перевозка детей',
+      description: 'Более узкий кейс для оценки спроса и смежных поставщиков.',
+      query: 'перевозка детей',
+      categoryId: 'cat_transport',
+    },
+    {
+      key: 'supplier-transport-microbus',
+      title: 'Микроавтобусы',
+      description: 'Открывает соседний транспортный сегмент без ручного ввода фильтров.',
+      query: 'микроавтобус',
+      categoryId: 'cat_transport',
+    },
+  ]
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) {
+    return '—'
+  }
+
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
 
 const Main = styled.main`
   width: min(1440px, calc(100% - 32px));
@@ -80,6 +217,80 @@ const Actions = styled.div`
   gap: 10px;
 `
 
+const OnboardingStrip = styled.section`
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 20px;
+  border: 1px solid #d9e0e8;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(249, 243, 236, 0.98) 100%);
+  box-shadow: 0 10px 24px rgba(74, 92, 117, 0.05);
+`
+
+const OnboardingHeader = styled.div`
+  display: grid;
+  gap: 6px;
+`
+
+const OnboardingTitle = styled.span`
+  color: #2a3c56;
+  font-size: 20px;
+  font-weight: 800;
+`
+
+const OnboardingText = styled.span`
+  color: #607085;
+  font-size: 14px;
+  line-height: 1.5;
+`
+
+const OnboardingGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+
+  @media (max-width: 1100px) {
+    grid-template-columns: 1fr;
+  }
+`
+
+const OnboardingCard = styled.button`
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #e5ddd4;
+  color: #273a53;
+  font: inherit;
+  text-align: left;
+  background: #fff;
+  cursor: pointer;
+
+  &:hover {
+    border-color: #c26d2d;
+    background: #fffaf4;
+  }
+`
+
+const OnboardingCardTitle = styled.span`
+  color: #7c4a1a;
+  font-size: 15px;
+  font-weight: 800;
+`
+
+const OnboardingCardText = styled.span`
+  color: #66778c;
+  font-size: 13px;
+  line-height: 1.45;
+`
+
+const OnboardingCardAction = styled.span`
+  color: #c26d2d;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+`
+
 const Grid = styled.section`
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -134,12 +345,74 @@ const InsightMeta = styled.span`
   line-height: 1.45;
 `
 
+const HeroTags = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+`
+
+const EmptyState = styled.div`
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  padding: 8px 0 2px;
+`
+
+const EmptyText = styled.span`
+  color: #67768a;
+  font-size: 13px;
+  line-height: 1.5;
+`
+
+const ActivityTimeline = styled.div`
+  display: grid;
+  gap: 12px;
+`
+
+const ActivityCard = styled.div`
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid #dde6ef;
+  background: #fbfcfe;
+`
+
+const ActivityTop = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+`
+
+const ActivityMeta = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+`
+
+const ActivityTitle = styled.span`
+  color: #2b3f5d;
+  font-size: 14px;
+  font-weight: 700;
+`
+
+const ActivityText = styled.span`
+  color: #64748a;
+  font-size: 13px;
+  line-height: 1.5;
+`
+
 function SupplierPage() {
   const session = readStoredSession()
   const navigate = useNavigate()
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all')
   const userId = session?.user_id ?? ''
   const actor: ActorContext = { userId }
   const isEnabled = Boolean(session) && session?.role === 'supplier'
+  const starterScenarios = buildSupplierStarterScenarios(session?.persona)
+  const showOnboarding = session?.entry_mode === 'empty' || session?.entry_mode === 'context'
 
   const summaryQuery = useQuery<CatalogSummary>({
     queryKey: ['catalog-summary', userId],
@@ -153,6 +426,19 @@ function SupplierPage() {
     enabled: isEnabled,
   })
 
+  const activityQuery = useQuery({
+    queryKey: ['search-activity', userId],
+    queryFn: () => getSearchActivity(actor, 10),
+    enabled: isEnabled,
+  })
+  const filteredActivityItems = useMemo(
+    () =>
+      (activityQuery.data?.items ?? []).filter(
+        (item) => activityFilter === 'all' || getActivityFilterKey(item.event_type) === activityFilter,
+      ),
+    [activityFilter, activityQuery.data?.items],
+  )
+
   if (!session || session.role !== 'supplier') {
     return <Navigate to="/" replace />
   }
@@ -161,6 +447,28 @@ function SupplierPage() {
     clearStoredSession()
     navigate('/', { replace: true })
   }
+
+  const openStarterScenario = (scenario: SupplierStarterScenario) => {
+    navigate('/', {
+      state: {
+        starterScenario: {
+          key: scenario.key,
+          title: scenario.title,
+          description: scenario.description,
+          query: scenario.query,
+          categoryId: scenario.categoryId,
+        },
+      },
+    })
+  }
+
+  const primaryScenario = starterScenarios[0]
+  const heroDescription =
+    session.entry_mode === 'context'
+      ? 'Организационный профиль уже подсказывает сегмент, но личная история действий еще не собрана. Запустите готовый сценарий, чтобы быстрее открыть спрос и конкуренцию.'
+      : session.entry_mode === 'empty'
+        ? 'Новый кабинет поставщика еще без сигналов и поисковой истории. Начните со стартового сценария и соберите первый рыночный срез.'
+        : 'Отдельная рабочая зона для анализа конкурентов, категорий спроса и горячих возможностей по вашему сегменту.'
 
   return (
     <PortalShell session={session} activeNav="supplier" onLogout={handleLogout}>
@@ -180,9 +488,18 @@ function SupplierPage() {
               Экран поставщика
             </Typography.Title>
             <Typography.Paragraph style={{ margin: 0, color: '#607085', fontSize: 16 }}>
-              Отдельная рабочая зона для анализа конкурентов, категорий спроса и горячих
-              возможностей по вашему сегменту.
+              {heroDescription}
             </Typography.Paragraph>
+            <HeroTags>
+              <Tag color="orange">{session.persona ?? 'Поставщик'}</Tag>
+              <Tag color={session.entry_mode === 'history' ? 'blue' : 'gold'}>
+                {session.entry_mode === 'history'
+                  ? 'С историей'
+                  : session.entry_mode === 'context'
+                    ? 'С контекстом'
+                    : 'Пустой кабинет'}
+              </Tag>
+            </HeroTags>
           </div>
 
           {supplierInsightsQuery.isLoading || summaryQuery.isLoading ? (
@@ -230,6 +547,103 @@ function SupplierPage() {
           )}
         </Hero>
 
+        {showOnboarding ? (
+          <OnboardingStrip>
+            <OnboardingHeader>
+              <OnboardingTitle>
+                {session.entry_mode === 'context'
+                  ? 'Организационный контекст уже есть, личный профиль еще пустой'
+                  : 'Новый кабинет поставщика готов к первому сценарию'}
+              </OnboardingTitle>
+              <OnboardingText>
+                {session.entry_mode === 'context'
+                  ? 'Dashboard уже может показать часть рыночного контекста, но лучшие инсайты появятся после первых поисков и действий в каталоге.'
+                  : 'У этого кабинета еще нет накопленной истории. Начните с готового сценария, чтобы быстро открыть свой сегмент и собрать первые сигналы.'}
+              </OnboardingText>
+              {session.entry_note ? <OnboardingText>{session.entry_note}</OnboardingText> : null}
+            </OnboardingHeader>
+
+            <OnboardingGrid>
+              {starterScenarios.map((scenario) => (
+                <OnboardingCard
+                  key={scenario.key}
+                  type="button"
+                  onClick={() => openStarterScenario(scenario)}
+                >
+                  <Tag color="orange">Сценарий поставщика</Tag>
+                  <OnboardingCardTitle>{scenario.title}</OnboardingCardTitle>
+                  <OnboardingCardText>{scenario.description}</OnboardingCardText>
+                  <OnboardingCardAction>Открыть в каталоге</OnboardingCardAction>
+                </OnboardingCard>
+              ))}
+            </OnboardingGrid>
+          </OnboardingStrip>
+        ) : null}
+
+        <SectionCard style={{ marginTop: 18 }}>
+          <HeroTop>
+            <SectionTitle level={3}>Последние действия</SectionTitle>
+            <Select
+              size="middle"
+              value={activityFilter}
+              style={{ minWidth: 180 }}
+              onChange={(value) => setActivityFilter(value as ActivityFilter)}
+              options={activityFilterOptions}
+            />
+          </HeroTop>
+          {activityQuery.isLoading ? (
+            <Skeleton active paragraph={{ rows: 5 }} />
+          ) : filteredActivityItems.length ? (
+            <ActivityTimeline>
+              {filteredActivityItems.map((item: SearchActivityItem) => (
+                <ActivityCard key={item.id}>
+                  <ActivityTop>
+                    <ActivityTitle>{item.title}</ActivityTitle>
+                    <Typography.Text style={{ color: '#7a889b', fontSize: 12 }}>
+                      {formatDateTime(item.created_at)}
+                    </Typography.Text>
+                  </ActivityTop>
+                  <ActivityMeta>
+                    <Tag color={getActivityColor(item.event_type)}>{item.event_type}</Tag>
+                    {item.query ? <Tag>{item.query}</Tag> : null}
+                    {item.ste_title ? <Tag color="geekblue">{item.ste_title}</Tag> : null}
+                  </ActivityMeta>
+                  <ActivityText>{item.description}</ActivityText>
+                </ActivityCard>
+              ))}
+            </ActivityTimeline>
+          ) : (activityQuery.data?.items ?? []).length ? (
+            <EmptyState>
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="Для этого типа действий пока нет событий."
+              />
+              <EmptyText>
+                Смените фильтр или продолжите работу в каталоге, чтобы собрать новые действия по
+                нужному сценарию.
+              </EmptyText>
+              <Button onClick={() => setActivityFilter('all')}>Показать все действия</Button>
+            </EmptyState>
+          ) : (
+            <EmptyState>
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="История действий пока пуста."
+              />
+              <EmptyText>
+                После первых поисков, открытий карточек и действий с shortlist здесь появится
+                живая лента поведения поставщика по текущему сегменту.
+              </EmptyText>
+              {session.entry_note ? <EmptyText>{session.entry_note}</EmptyText> : null}
+              {primaryScenario ? (
+                <Button type="primary" ghost onClick={() => openStarterScenario(primaryScenario)}>
+                  Начать со сценария
+                </Button>
+              ) : null}
+            </EmptyState>
+          )}
+        </SectionCard>
+
         {supplierInsightsQuery.isLoading ? (
           <SectionCard style={{ marginTop: 18 }}>
             <Skeleton active paragraph={{ rows: 10 }} />
@@ -253,7 +667,26 @@ function SupplierPage() {
                     </InsightCard>
                   ))
                 ) : (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Совпавшие поставщики не найдены." />
+                  <EmptyState>
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description={
+                        showOnboarding
+                          ? 'Совпавшие поставщики пока не найдены.'
+                          : 'Совпавшие поставщики не найдены.'
+                      }
+                    />
+                    <EmptyText>
+                      {showOnboarding
+                        ? 'Откройте стартовый сценарий и посмотрите, кто уже присутствует в вашем сегменте.'
+                        : 'Попробуйте открыть каталог по смежной категории и проверить конкуренцию вручную.'}
+                    </EmptyText>
+                    {primaryScenario ? (
+                      <Button onClick={() => openStarterScenario(primaryScenario)}>
+                        Открыть первый сценарий
+                      </Button>
+                    ) : null}
+                  </EmptyState>
                 )}
               </InsightList>
             </SectionCard>
@@ -274,7 +707,26 @@ function SupplierPage() {
                     </InsightCard>
                   ))
                 ) : (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Спросовые категории пока не определены." />
+                  <EmptyState>
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description={
+                        showOnboarding
+                          ? 'Спросовые категории еще не определены.'
+                          : 'Спросовые категории пока не определены.'
+                      }
+                    />
+                    <EmptyText>
+                      {showOnboarding
+                        ? 'После первых поисков dashboard сможет показать, где в вашем сегменте есть устойчивый спрос.'
+                        : 'Добавьте больше поисковых сигналов через каталог, чтобы расширить категорийный срез.'}
+                    </EmptyText>
+                    {primaryScenario ? (
+                      <Button type="primary" ghost onClick={() => openStarterScenario(primaryScenario)}>
+                        Посмотреть спрос в каталоге
+                      </Button>
+                    ) : null}
+                  </EmptyState>
                 )}
               </InsightList>
             </SectionCard>
@@ -295,7 +747,24 @@ function SupplierPage() {
                     </InsightCard>
                   ))
                 ) : (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Конкуренты пока не найдены." />
+                  <EmptyState>
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description={
+                        showOnboarding ? 'Конкуренты пока не определены.' : 'Конкуренты пока не найдены.'
+                      }
+                    />
+                    <EmptyText>
+                      {showOnboarding
+                        ? 'Готовый сценарий быстро покажет смежных поставщиков и поможет собрать конкурентный контур.'
+                        : 'Переключитесь в каталог и проверьте смежные позиции, чтобы обновить конкурентную картину.'}
+                    </EmptyText>
+                    {primaryScenario ? (
+                      <Button onClick={() => openStarterScenario(primaryScenario)}>
+                        Открыть конкурентный сценарий
+                      </Button>
+                    ) : null}
+                  </EmptyState>
                 )}
               </InsightList>
             </SectionCard>
@@ -316,7 +785,24 @@ function SupplierPage() {
                     </InsightCard>
                   ))
                 ) : (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Горячие позиции пока не определены." />
+                  <EmptyState>
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description={
+                        showOnboarding
+                          ? 'Горячие возможности пока не определены.'
+                          : 'Горячие позиции пока не определены.'
+                      }
+                    />
+                    <EmptyText>
+                      {showOnboarding
+                        ? 'После первых поисков и переходов по каталогу здесь появятся позиции с заметным спросом по вашему профилю.'
+                        : 'Расширьте поисковые действия в каталоге, чтобы dashboard начал выделять горячие позиции.'}
+                    </EmptyText>
+                    <Button icon={<AppstoreOutlined />} onClick={() => navigate('/')}>
+                      Перейти в каталог
+                    </Button>
+                  </EmptyState>
                 )}
               </InsightList>
             </SectionCard>

@@ -64,10 +64,15 @@ class DemoSmokeFlowTests(unittest.TestCase):
             personalization_service = PersonalizationService(PersonalizationRepository(session))
 
             demo_users = auth_service.list_demo_users()
-            self.assertGreaterEqual(len(demo_users), 2)
+            self.assertGreaterEqual(len(demo_users), 8)
+            self.assertTrue(any(user.has_history for user in demo_users))
+            self.assertTrue(any(not user.has_history for user in demo_users))
 
-            login = auth_service.login_demo(DemoLoginRequest(user_id=demo_users[0].id))
-            self.assertEqual(login.user_id, demo_users[0].id)
+            seeded_user = next(
+                user for user in demo_users if user.role == "customer" and user.has_history
+            )
+            login = auth_service.login_demo(DemoLoginRequest(user_id=seeded_user.id))
+            self.assertEqual(login.user_id, seeded_user.id)
             self.assertEqual(login.role, "customer")
 
             actor = CurrentActor(
@@ -130,6 +135,44 @@ class DemoSmokeFlowTests(unittest.TestCase):
                 profile.active_signals,
             )
             self.assertIn(top_item.id, profile.recent_ste_ids)
+
+    def test_empty_demo_customer_has_no_history_before_new_actions(self) -> None:
+        with self.session_factory() as session:
+            auth_service = AuthService(session)
+            search_repository = SearchRepository(session)
+            catalog_service = CatalogService(
+                repository=CatalogRepository(session),
+                search_repository=search_repository,
+            )
+            personalization_service = PersonalizationService(PersonalizationRepository(session))
+
+            empty_user = next(
+                user
+                for user in auth_service.list_demo_users()
+                if user.role == "customer" and not user.has_history
+            )
+            actor = CurrentActor(
+                user_id=empty_user.id,
+                organization_id=empty_user.organization_id,
+                role=empty_user.role,
+            )
+
+            purchases = catalog_service.get_purchase_history(
+                user_id=actor.user_id,
+                organization_id=actor.organization_id,
+                limit=6,
+            )
+            profile = personalization_service.get_search_profile(
+                user_id=actor.user_id,
+                organization_id=actor.organization_id,
+            )
+
+            self.assertEqual(purchases, [])
+            self.assertEqual(profile.top_categories, [])
+            self.assertEqual(profile.recent_ste_ids, [])
+            self.assertEqual(profile.top_suppliers, [])
+            self.assertEqual(profile.popular_queries, [])
+            self.assertEqual(profile.active_signals, [])
 
     def test_debug_telemetry_lists_recent_events_and_impressions(self) -> None:
         with self.session_factory() as session:

@@ -228,6 +228,95 @@ const RelatedCard = styled.div`
   background: #fbfcfe;
 `
 
+const InsightPanel = styled.div`
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #dde6ef;
+  background: #fbfcfe;
+`
+
+const InsightText = styled.span`
+  color: #64748a;
+  font-size: 14px;
+  line-height: 1.55;
+`
+
+const InsightList = styled.div`
+  display: grid;
+  gap: 10px;
+`
+
+const InsightCard = styled.div`
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #e1e8f0;
+  background: #ffffff;
+`
+
+const InsightTitle = styled.span`
+  color: #2b3f5d;
+  font-size: 14px;
+  font-weight: 700;
+`
+
+const InsightActions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+`
+
+function buildExplainabilityNotes(
+  entryMode: string | null | undefined,
+  item: CatalogItem,
+  state: { inFavorites: boolean; inComparison: boolean; inCart: boolean; hasSessionContext: boolean },
+) {
+  const notes = [
+    entryMode === 'empty'
+      ? {
+          title: 'Один из первых сигналов профиля',
+          text: `Карточка помогает новому кабинету собрать первый рабочий контекст по категории "${item.category_name}" и поставщику "${item.supplier_name}".`,
+        }
+      : entryMode === 'context'
+      ? {
+          title: 'Релевантность строится на организационном контексте',
+          text: `Личная история еще не накоплена, поэтому эта позиция особенно полезна как отправная точка для сегмента "${item.category_name}".`,
+        }
+      : {
+          title: 'Карточка усиливает существующий профиль',
+          text: `Эта позиция дополняет уже накопленные сигналы пользователя и помогает уточнить интерес к сегменту "${item.category_name}".`,
+        },
+    state.inFavorites
+      ? {
+          title: 'Позиция сохранена в shortlist',
+          text: 'Избранное зафиксировало явный интерес к карточке, поэтому к ней можно быстро вернуться из кабинета.',
+        }
+      : {
+          title: 'Сигнал еще не закреплен',
+          text: 'Если карточка подходит, добавьте ее в избранное или сравнение, чтобы система считала ее устойчивым интересом.',
+        },
+    state.inCart
+      ? {
+          title: 'Карточка уже в закупочном черновике',
+          text: 'Позиция участвует в рабочем подборе и напрямую влияет на дальнейший профиль действий пользователя.',
+        }
+      : state.inComparison
+      ? {
+          title: 'Карточка участвует в сравнении',
+          text: 'Вы уже отправили позицию в compare-flow. Следующий полезный шаг: проверить соседние карточки и собрать shortlist.',
+        }
+      : {
+          title: state.hasSessionContext ? 'Есть поисковый контекст' : 'Контекст еще собирается',
+          text: state.hasSessionContext
+            ? 'Карточка открыта в рамках активной поисковой сессии, поэтому действия на ней попадут в explainability и telemetry пользователя.'
+            : 'Откройте карточку из каталога после поиска или добавьте позицию в корзину, чтобы связать ее с рабочим сценарием пользователя.',
+        },
+  ]
+
+  return notes
+}
+
 function ProductPage() {
   const session = readStoredSession()
   const { steId } = useParams<{ steId: string }>()
@@ -416,6 +505,14 @@ function ProductPage() {
   const [from, to] = buildCardTone(safeSteId)
   const item = detailQuery.data
   const backPath = session.role === 'supplier' ? '/supplier' : '/'
+  const explainabilityNotes = item
+    ? buildExplainabilityNotes(session.entry_mode, item, {
+        inFavorites: favoriteIds.has(item.id),
+        inComparison: comparisonIds.has(item.id),
+        inCart: cartMap.has(item.id),
+        hasSessionContext: Boolean(sessionId),
+      })
+    : []
   const handleLogout = () => {
     clearStoredSession()
     navigate('/', { replace: true })
@@ -555,6 +652,42 @@ function ProductPage() {
         {item ? (
           <>
             <SectionCard>
+              <SectionTitle level={3}>Почему карточка может быть полезна</SectionTitle>
+              <InsightPanel>
+                <InsightText>
+                  {session.role === 'supplier'
+                    ? 'Для поставщика карточка помогает оценить смежный спрос, конкурентов и то, насколько позиция вписывается в рабочий сегмент.'
+                    : 'Для заказчика карточка помогает понять, подходит ли позиция под текущий сценарий закупки и стоит ли закрепить ее в shortlist.'}
+                </InsightText>
+                {session.entry_note ? <InsightText>{session.entry_note}</InsightText> : null}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  <Tag color={session.entry_mode === 'history' ? 'blue' : 'gold'}>
+                    {session.entry_mode === 'history'
+                      ? 'С историей'
+                      : session.entry_mode === 'context'
+                      ? 'С контекстом'
+                      : 'Пустой кабинет'}
+                  </Tag>
+                  {favoriteIds.has(item.id) ? <Tag color="magenta">В избранном</Tag> : null}
+                  {comparisonIds.has(item.id) ? <Tag color="purple">В сравнении</Tag> : null}
+                  {cartMap.has(item.id) ? <Tag color="green">В корзине</Tag> : null}
+                </div>
+              </InsightPanel>
+              <InsightList>
+                {explainabilityNotes.map((note) => (
+                  <InsightCard key={note.title}>
+                    <InsightTitle>{note.title}</InsightTitle>
+                    <InsightText>{note.text}</InsightText>
+                  </InsightCard>
+                ))}
+              </InsightList>
+              <InsightActions>
+                <Button onClick={() => navigate(backPath)}>Вернуться к выдаче</Button>
+                <Button onClick={() => navigate('/cart')}>Открыть корзину</Button>
+              </InsightActions>
+            </SectionCard>
+
+            <SectionCard>
               <SectionTitle level={3}>Характеристики</SectionTitle>
               <AttributeGrid>
                 {Object.entries(item.attributes).length ? (
@@ -598,7 +731,25 @@ function ProductPage() {
                       </RelatedCard>
                     ))
                   ) : (
-                    <Typography.Text type="secondary">Похожие позиции не найдены.</Typography.Text>
+                    <InsightPanel>
+                      <InsightText>
+                        Похожие позиции пока не найдены. Это нормально для нового или узкого
+                        сценария: закрепите карточку в избранном, сравнении или корзине, чтобы
+                        быстрее собрать смежный контекст.
+                      </InsightText>
+                      <InsightActions>
+                        <Button
+                          onClick={() =>
+                            favoriteMutation.mutate({
+                              active: favoriteIds.has(item.id),
+                            })
+                          }
+                        >
+                          {favoriteIds.has(item.id) ? 'Уже в избранном' : 'Добавить в избранное'}
+                        </Button>
+                        <Button onClick={() => navigate(backPath)}>Назад к каталогу</Button>
+                      </InsightActions>
+                    </InsightPanel>
                   )}
                 </RelatedGrid>
               )}

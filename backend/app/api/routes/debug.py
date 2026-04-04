@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
@@ -12,9 +12,27 @@ from app.domain.events.schemas import (
     TelemetryHealthRead,
 )
 from app.domain.events.service import EventService
-from app.domain.search.schemas import CurrentActor
+from app.domain.search.schemas import CurrentActor, SearchStackStatusRead
 
 router = APIRouter()
+
+
+@router.get("/search-stack", response_model=SearchStackStatusRead)
+async def get_debug_search_stack(request: Request) -> SearchStackStatusRead:
+    search_warmup = getattr(request.app.state, "search_warmup", "unknown")
+    ranking_warmup = getattr(request.app.state, "ranking_warmup", "unknown")
+    return SearchStackStatusRead(
+        ready=search_warmup == "ready" and ranking_warmup == "ready",
+        search_warmup=search_warmup,
+        ranking_warmup=ranking_warmup,
+        ranking_provider=getattr(request.app.state, "ranking_provider_name", None),
+        ranking_provider_mode=getattr(request.app.state, "ranking_provider_mode", None),
+        search_documents_count=getattr(request.app.state, "search_documents_count", None),
+        semantic_backend=getattr(request.app.state, "semantic_backend", None),
+        semantic_faiss_enabled=getattr(request.app.state, "semantic_faiss_enabled", None),
+        search_warmup_error=getattr(request.app.state, "search_warmup_error", None),
+        ranking_warmup_error=getattr(request.app.state, "ranking_warmup_error", None),
+    )
 
 
 @router.get("/telemetry/events", response_model=SearchEventListRead)

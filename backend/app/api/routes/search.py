@@ -8,6 +8,7 @@ from app.api.dependencies import (
 )
 from app.domain.search.schemas import (
     CurrentActor,
+    SearchActivityResponse,
     SearchHistoryResponse,
     SearchRequest,
     SearchResponse,
@@ -76,3 +77,13 @@ async def history(
 ) -> SearchHistoryResponse:
     search_service = get_search_service(session)
     return search_service.get_history(actor=actor, limit=limit)
+
+
+@router.get("/activity", response_model=SearchActivityResponse)
+async def activity(
+    limit: int = Query(20, ge=1, le=100),
+    session: Session = Depends(get_session_dependency),
+    actor: CurrentActor = Depends(get_current_actor),
+) -> SearchActivityResponse:
+    search_service = get_search_service(session)
+    return search_service.get_recent_activity(actor=actor, limit=limit)

@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     search_semantic_dense_min_score: float = 0.2
     search_semantic_fallback_min_score: float = 0.12
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/tender_search"
-    demo_user_id: str = "user_1"
-    demo_organization_id: str = "org_1"
+    demo_user_id: str = "demo_customer_transport"
+    demo_organization_id: str = "demo_org_transport"
 
     model_config = SettingsConfigDict(
         env_file=".env",

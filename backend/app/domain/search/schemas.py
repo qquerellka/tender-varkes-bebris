@@ -91,6 +91,36 @@ class SearchHistoryResponse(BaseModel):
     items: list[SearchSessionRead] = Field(default_factory=list)
 
 
+class SearchActivityItemRead(BaseModel):
+    id: str
+    session_id: str
+    event_type: str
+    title: str
+    description: str
+    ste_id: str | None = None
+    ste_title: str | None = None
+    page_type: str | None = None
+    query: str | None = None
+    created_at: datetime
+
+
+class SearchActivityResponse(BaseModel):
+    items: list[SearchActivityItemRead] = Field(default_factory=list)
+
+
 class SpellcheckResponse(BaseModel):
     original_query: str
     corrected_query: str | None = None
+
+
+class SearchStackStatusRead(BaseModel):
+    ready: bool
+    search_warmup: str
+    ranking_warmup: str
+    ranking_provider: str | None = None
+    ranking_provider_mode: str | None = None
+    search_documents_count: int | None = None
+    semantic_backend: str | None = None
+    semantic_faiss_enabled: bool | None = None
+    search_warmup_error: str | None = None
+    ranking_warmup_error: str | None = None

@@ -158,7 +158,7 @@ Backend сейчас выступает как orchestration layer для search
 
 Backend использует их как ranking boosts.
 
-Подробная спецификация event-модели и search telemetry лежит в [TELEMETRY_SPEC.md](/home/qquerell/programming/frontend-template/my-app/backend/TELEMETRY_SPEC.md).
+Подробная спецификация event-модели и search telemetry лежит в [TELEMETRY_SPEC.md](./TELEMETRY_SPEC.md).
 
 ## Механизмы Качества Поиска
 
@@ -211,7 +211,7 @@ Backend должен продолжать работать даже без ML.
 
 ## Рекомендуемые Следующие Шаги
 
-1. Дальше улучшать морфологию русского языка поверх простых term variants.
-2. Добавить реальную `MlRankingProvider` implementation за ranking adapter.
-3. Ввести observability для качества поиска и fallback activation.
-4. Расширить search signals и quality metrics.
+1. Дальше улучшать demo и QA-контур: документация, тесты, debug-экраны.
+2. Ввести observability для качества поиска, warmup и fallback activation.
+3. Расширить integration/API tests для auth, telemetry, profile и search.
+4. Расширить search signals и quality metrics без изменения публичного API.
