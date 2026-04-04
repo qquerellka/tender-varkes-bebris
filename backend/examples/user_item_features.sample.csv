@@ -1,0 +1,7 @@
+user_id,ste_id,click_count,open_count,favorite_count,compare_count,cart_add_count,cart_remove_count,purchase_count,avg_dwell_ms,pogo_count,last_action_at
+demo_customer_transport,ste_101,3,2,1,0,1,0,1,30214,0,2026-04-04T10:05:00Z
+demo_customer_transport,ste_108,2,1,0,1,0,0,0,11842,0,2026-04-04T09:41:12Z
+demo_customer_transport,ste_111,1,1,0,0,1,1,0,4120,1,2026-04-04T09:22:40Z
+demo_customer_office,ste_205,5,4,2,1,3,0,2,18874,0,2026-04-04T11:16:55Z
+demo_customer_office,ste_213,4,3,0,1,1,0,0,9321,0,2026-04-04T11:03:21Z
+demo_supplier_construction,ste_342,2,2,0,0,0,0,0,15602,0,2026-04-04T08:55:07Z

@@ -1,0 +1,243 @@
+Metadata-Version: 2.4
+Name: tender-search-backend
+Version: 0.1.0
+Summary: FastAPI backend skeleton for personalized search without ML implementation
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: alembic>=1.13.0
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: pydantic-settings>=2.4.0
+Requires-Dist: sqlalchemy>=2.0.35
+Requires-Dist: psycopg[binary]>=3.2.0
+Requires-Dist: numpy>=1.26.0
+Requires-Dist: scipy>=1.12.0
+Requires-Dist: scikit-learn>=1.4.0
+Requires-Dist: catboost>=1.2.0
+Requires-Dist: joblib>=1.3.0
+Requires-Dist: pymorphy3>=2.0.0
+Provides-Extra: semantic
+Requires-Dist: FlagEmbedding>=1.3.3; extra == "semantic"
+Requires-Dist: faiss-cpu>=1.8.0; extra == "semantic"
+Requires-Dist: torch>=2.2.0; extra == "semantic"
+Requires-Dist: transformers<5.0.0,>=4.44.2; extra == "semantic"
+
+# Backend
+
+Backend на FastAPI для каталога, поиска и baseline-ранжирования.
+
+## Назначение
+
+- API для каталога и поиска
+- гибридное извлечение без обязательного внешнего поискового движка
+- базовое ранжирование и резервный режим без ML
+- rule-based personalization
+- хранение search sessions и событий
+- точка интеграции для будущего ML reranker
+- PostgreSQL + SQLAlchemy + Alembic
+
+## Документы
+
+- `ARCHITECTURE.md` - структура backend
+- `ML_HANDOFF.md` - контракт backend <-> ML
+
+## Локальный запуск
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+Для семантического поиска на плотных эмбеддингах с `BAAI/bge-m3` и FAISS:
+
+```bash
+pip install -e ".[semantic]"
+```
+
+## База данных
+
+```bash
+cd backend
+cp .env.example .env
+docker compose -f ../docker-compose.yml up -d postgres
+alembic upgrade head
+python -m app.bootstrap
+```
+
+## Запуск API
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --reload
+```
+
+## Команды Makefile
+
+```bash
+cd backend
+make install
+make db-up
+make migrate
+make seed
+make run
+```
+
+## Полный стек через Docker
+
+```bash
+cd ..
+docker compose up --build
+```
+
+Для CatBoost reranking перед запуском Docker желательно:
+
+```bash
+python ML/tools/build_ml_splits.py
+python ML/tools/train_ranker.py --artifacts-dir ML/models/catboost_ranker_v1
+```
+
+Backend по умолчанию ищет ML артефакты в:
+
+```text
+/app/ML/models/catboost_ranker_v1
+```
+
+## Импорт реальных CSV портала
+
+Поддержан отдельный импорт для файлов:
+
+- `../СТЕ_20260403.csv`
+- `../Контракты_20260403.csv`
+
+Запуск:
+
+```bash
+cd backend
+make migrate
+make seed-portal
+```
+
+Или напрямую:
+
+```bash
+cd backend
+python -m app.import_portal_csv \
+  --ste-csv ../СТЕ_20260403.csv \
+  --contracts-csv ../Контракты_20260403.csv
+```
+
+Если нужен bootstrap через `python -m app.bootstrap`, можно выставить:
+
+```bash
+BOOTSTRAP_DATASET=portal_csv
+```
+
+Дополнительные переменные:
+
+- `PORTAL_STE_CSV_PATH`
+- `PORTAL_CONTRACTS_CSV_PATH`
+- `PORTAL_IMPORT_STE_LIMIT`
+- `PORTAL_IMPORT_CONTRACT_LIMIT`
+- `PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT`
+
+## Полезные ручки
+
+```text
+GET  /health
+GET  /docs
+GET  /redoc
+GET  /api/v1/catalog/categories
+GET  /api/v1/catalog/suppliers
+GET  /api/v1/catalog/ste/{ste_id}
+GET  /api/v1/catalog/ste/{ste_id}/related
+GET  /api/v1/profile/search
+GET  /api/v1/search/suggestions?query=ав
+GET  /api/v1/search/spellcheck?query=абтобус
+GET  /api/v1/search/history
+POST /api/v1/search
+POST /api/v1/events
+```
+
+## Пример Search Payload
+
+```json
+{
+  "query": "автобус для детей",
+  "filters": {
+    "strict_match": false
+  }
+}
+```
+
+## Алгоритм поиска
+
+Текущий `POST /api/v1/search` работает как двухслойный pipeline:
+
+1. `Query understanding`.
+   Запрос нормализуется, исправляются словарные опечатки, fuzzy-опечатки по vocabulary каталога и ошибочная раскладка клавиатуры.
+2. `Морфология и доменная нормализация`.
+   Русские термы лемматизируются через `pymorphy3`, затем расширяются сокращениями и доменными alias-ами вроде `мфу`, `пк`, `канцтовары`.
+3. `Synonym expansion`.
+   Для исходных и расширенных термов подмешиваются синонимы из таблицы `synonyms`.
+4. `Подготовка retrieval-запросов`.
+   Backend формирует несколько представлений одного и того же запроса:
+   - raw / normalized lexical query
+   - morphology-aware query
+   - structured query с брендами, моделями, числами, единицами и size tokens
+   - synonym-expanded lexical query
+   - trigram/fuzzy query
+   - семантическое представление запроса
+5. `Гибридное извлечение`.
+   Каталог один раз загружается в in-memory индекс, после чего на каждом запросе запускаются каналы recall:
+   - `exact / structured retrieval` для brand/model/code/size/quantity-sensitive запросов
+   - `attribute retrieval` по category hints и извлеченным атрибутам
+   - `fielded BM25` с разными весами для `title`, `attributes`, `category`, `description`, `supplier`
+   - `morphology-aware BM25` по лемматизированным термам
+   - `fuzzy retrieval` по схеме `trigram shortlist -> Damerau-Levenshtein similarity`
+   - `synonym-expanded BM25`
+   - `семантическое векторное извлечение` на `BAAI/bge-m3` с FAISS-индексом
+     - если модель плотных эмбеддингов или `faiss-cpu` недоступны, backend автоматически использует резервный слой TF-IDF + символьные n-граммы + SVD
+6. `Объединение через взвешенный RRF`.
+   Результаты всех каналов объединяются через weighted Reciprocal Rank Fusion. Более точные структурные каналы получают больший вес, а семантическое и синонимическое извлечение используются аккуратно как расширение набора кандидатов. На выходе каждый кандидат получает `retrieval_score`, оценки и позиции по каналам, причины вроде `retrieval_exact`, `retrieval_attribute`, `retrieval_bm25`, `retrieval_morphology`, `retrieval_fuzzy`, `retrieval_synonym`, `retrieval_semantic`, `retrieval_rrf` и набор признаков извлечения для reranker.
+7. `Базовое ранжирование`.
+   Поверх набора кандидатов применяется ранжирование по правилам: лексическое совпадение, пересечение токенов, `retrieval_score` и персонализация по профилю пользователя и организации.
+8. `Необязательное ML-перенранжирование`.
+   Если включен `RANKING_PROVIDER=local_ml`, кандидаты передаются в провайдер ранжирования. Если ML недоступен, backend возвращает базовое ранжирование.
+9. `Response`.
+   В ответе возвращаются найденные позиции, `normalized_query`, `corrected_query`, примененные синонимы и режим ранжирования.
+
+Коротко:
+
+```text
+query
+-> normalization / spellcheck / keyboard layout correction
+-> lemmatization + domain expansion
+-> structured query analysis
+-> synonym expansion
+-> exact / structured retrieval
+-> attribute retrieval
+-> BM25
+-> morphology BM25
+-> trigram
+-> synonym BM25
+-> семантическое извлечение
+-> взвешенный RRF
+-> baseline ranking + personalization
+-> optional ML rerank
+-> response
+```
+
+## Suggestions и Spellcheck
+
+- `GET /api/v1/search/suggestions` использует тот же слой понимания запроса и то же гибридное извлечение, но возвращает историю, категории и товарные подсказки.
+- `GET /api/v1/search/spellcheck` использует только слой коррекции и не запускает полный этап извлечения.
+
+## Ограничения
+
+- текущая auth-модель demo-only
+- персонализация пока rule-based
+- online learning и динамическое обновление индексов пока не включены
+- in-memory retrieval индекс подходит для MVP и демо, но для production-каталога лучше выносить lexical и vector retrieval в отдельный search stack
