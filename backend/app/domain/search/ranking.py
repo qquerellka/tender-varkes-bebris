@@ -16,6 +16,7 @@ def build_candidate(
     retrieval_channel_scores: dict[str, float] | None = None,
     retrieval_channel_ranks: dict[str, int] | None = None,
     retrieval_features: dict[str, float] | None = None,
+    retrieval_only: bool = False,
 ) -> CandidateItem:
     title = item.title.lower()
     description = item.description.lower()
@@ -24,6 +25,29 @@ def build_candidate(
     reasons: list[str] = []
     query_tokens = query_terms or extract_query_terms(normalized_query)
     structured_features = retrieval_features or {}
+
+    if retrieval_only:
+        retrieval_only_score = round(float(retrieval_score), 4)
+        reasons = list(dict.fromkeys(retrieval_reasons or ["retrieval_rrf"]))
+        return CandidateItem(
+            id=item.id,
+            title=item.title,
+            category=item.category_name,
+            supplier=item.supplier_name,
+            description=item.description,
+            score=retrieval_only_score,
+            reasons=reasons,
+            category_id=item.category_id,
+            supplier_id=item.supplier_id,
+            status=item.status,
+            attributes=item.attributes,
+            baseline_score=retrieval_only_score,
+            retrieval_score=retrieval_only_score,
+            retrieval_reasons=list(dict.fromkeys(retrieval_reasons or [])),
+            retrieval_channel_scores=dict(retrieval_channel_scores or {}),
+            retrieval_channel_ranks=dict(retrieval_channel_ranks or {}),
+            retrieval_features=dict(structured_features),
+        )
 
     if normalized_query:
         if normalized_query == title:

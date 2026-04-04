@@ -1,10 +1,15 @@
+import logging
+import pickle
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import Text, cast, func, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import settings
 from app.db.models import (
     CategoryModel,
     STEItemModel,
@@ -13,9 +18,16 @@ from app.db.models import (
     SupplierModel,
     SynonymModel,
 )
-from app.domain.search.normalizer import extract_query_terms, normalize_query
+from app.domain.search.normalizer import (
+    SpellVocabularyIndex,
+    build_spell_vocabulary_index,
+    extract_query_terms,
+    normalize_query,
+)
 from app.domain.search.query_analysis import SearchTextAnalysis
 from app.domain.search.retrieval import HybridSearchIndex, SearchDocument
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -37,7 +49,10 @@ class SynonymExpansion:
 
 
 class SearchRepository:
+    _INDEX_CACHE_FORMAT_VERSION = 1
+    _hybrid_index_lock = threading.Lock()
     _search_vocabulary_cache: set[str] | None = None
+    _search_spell_vocabulary_cache: SpellVocabularyIndex | None = None
     _search_vocabulary_pattern = re.compile(r"[0-9a-zа-яё]+", flags=re.IGNORECASE)
     _hybrid_index_cache: HybridSearchIndex | None = None
     _hybrid_index_signature: tuple[int, datetime | None] | None = None
@@ -196,6 +211,84 @@ class SearchRepository:
         if cache is not None:
             return cache
 
+        vocabulary = self._build_search_vocabulary(self._get_hybrid_index())
+        self.__class__._search_vocabulary_cache = vocabulary
+        self.__class__._search_spell_vocabulary_cache = build_spell_vocabulary_index(
+            vocabulary
+        )
+        return vocabulary
+
+    def get_search_spell_vocabulary(self) -> SpellVocabularyIndex:
+        cache = self.__class__._search_spell_vocabulary_cache
+        if cache is not None:
+            return cache
+
+        vocabulary = self.get_search_vocabulary()
+        cache = build_spell_vocabulary_index(vocabulary)
+        self.__class__._search_spell_vocabulary_cache = cache
+        return cache
+
+    def _get_hybrid_index(self) -> HybridSearchIndex:
+        signature = self._get_catalog_signature()
+        cache = self.__class__._hybrid_index_cache
+        if cache is not None and self.__class__._hybrid_index_signature == signature:
+            return cache
+
+        with self.__class__._hybrid_index_lock:
+            cache = self.__class__._hybrid_index_cache
+            if cache is not None and self.__class__._hybrid_index_signature == signature:
+                return cache
+
+            persisted_cache = self._load_persisted_hybrid_index(signature)
+            if persisted_cache is not None:
+                self.__class__._hybrid_index_cache = persisted_cache
+                self.__class__._hybrid_index_signature = signature
+                vocabulary = self._build_search_vocabulary(persisted_cache)
+                self.__class__._search_vocabulary_cache = vocabulary
+                self.__class__._search_spell_vocabulary_cache = build_spell_vocabulary_index(
+                    vocabulary
+                )
+                return persisted_cache
+
+            documents = self._build_search_documents()
+            cache = HybridSearchIndex(
+                documents,
+                enable_semantic=settings.search_semantic_backend.strip().lower() != "disabled",
+                progress=True,
+            )
+            self.__class__._hybrid_index_cache = cache
+            self.__class__._hybrid_index_signature = signature
+            vocabulary = self._build_search_vocabulary(cache)
+            self.__class__._search_vocabulary_cache = vocabulary
+            self.__class__._search_spell_vocabulary_cache = build_spell_vocabulary_index(
+                vocabulary
+            )
+            self._save_persisted_hybrid_index(signature, cache)
+            return cache
+
+    def _build_search_documents(self) -> list[SearchDocument]:
+        stmt = (
+            select(STEItemModel)
+            .options(joinedload(STEItemModel.category), joinedload(STEItemModel.supplier))
+            .order_by(STEItemModel.updated_at.desc(), STEItemModel.title.asc())
+        )
+        return [
+            SearchDocument(
+                id=item.id,
+                title=item.title,
+                description=item.description,
+                category_id=item.category_id,
+                category_name=item.category.name if item.category else "",
+                supplier_id=item.supplier_id,
+                supplier_name=item.supplier.name if item.supplier else "",
+                attributes=item.attributes_json,
+                status=item.status,
+                updated_at=item.updated_at,
+            )
+            for item in self.session.scalars(stmt)
+        ]
+
+    def _build_search_vocabulary(self, index: HybridSearchIndex) -> set[str]:
         vocabulary: set[str] = set()
 
         for row in self.session.execute(
@@ -208,48 +301,88 @@ class SearchRepository:
             vocabulary.update(self._extract_tokens(row.term))
             vocabulary.update(self._extract_tokens(row.synonym))
 
-        for document in self._get_hybrid_index().documents:
-            vocabulary.update(self._extract_tokens(document.payload.title))
-            vocabulary.update(self._extract_tokens(document.payload.description))
-            vocabulary.update(self._extract_tokens(" ".join(document.payload.attributes.values())))
-            vocabulary.update(self._extract_tokens(document.payload.category_name))
-            vocabulary.update(self._extract_tokens(document.payload.supplier_name))
+        for document in index.documents:
+            for tokens in document.field_term_sets.values():
+                vocabulary.update(tokens)
+            for tokens in document.field_lemma_sets.values():
+                vocabulary.update(tokens)
 
-        self.__class__._search_vocabulary_cache = vocabulary
         return vocabulary
 
-    def _get_hybrid_index(self) -> HybridSearchIndex:
-        signature = self._get_catalog_signature()
-        cache = self.__class__._hybrid_index_cache
-        if cache is not None and self.__class__._hybrid_index_signature == signature:
-            return cache
+    @classmethod
+    def _resolve_search_index_cache_path(cls) -> Path | None:
+        raw_path = settings.search_index_cache_path.strip()
+        if not raw_path:
+            return None
+        return Path(raw_path).expanduser()
 
-        stmt = (
-            select(STEItemModel)
-            .options(joinedload(STEItemModel.category), joinedload(STEItemModel.supplier))
-            .order_by(STEItemModel.updated_at.desc(), STEItemModel.title.asc())
-        )
-        documents = [
-            SearchDocument(
-                id=item.id,
-                title=item.title,
-                description=item.description,
-                category_id=item.category_id,
-                category_name=item.category.name,
-                supplier_id=item.supplier_id,
-                supplier_name=item.supplier.name,
-                attributes=item.attributes_json,
-                status=item.status,
-                updated_at=item.updated_at,
+    @classmethod
+    def _load_persisted_hybrid_index(
+        cls,
+        signature: tuple[int, datetime | None],
+    ) -> HybridSearchIndex | None:
+        cache_path = cls._resolve_search_index_cache_path()
+        if cache_path is None or not cache_path.exists():
+            return None
+
+        try:
+            with cache_path.open("rb") as handle:
+                payload = pickle.load(handle)
+        except Exception as exc:
+            LOGGER.warning("Failed to read persisted search index cache %s: %s", cache_path, exc)
+            cache_path.unlink(missing_ok=True)
+            return None
+
+        if not isinstance(payload, dict):
+            cache_path.unlink(missing_ok=True)
+            return None
+
+        if payload.get("version") != cls._INDEX_CACHE_FORMAT_VERSION:
+            return None
+        if payload.get("signature") != signature:
+            return None
+        if payload.get("requested_semantic_backend") != settings.search_semantic_backend.strip().lower():
+            return None
+
+        index = payload.get("index")
+        if not isinstance(index, HybridSearchIndex):
+            cache_path.unlink(missing_ok=True)
+            return None
+
+        LOGGER.info("Loaded persisted search index cache from %s", cache_path)
+        return index
+
+    @classmethod
+    def _save_persisted_hybrid_index(
+        cls,
+        signature: tuple[int, datetime | None],
+        index: HybridSearchIndex,
+    ) -> None:
+        cache_path = cls._resolve_search_index_cache_path()
+        if cache_path is None:
+            return
+        if index._semantic_faiss_index is not None:
+            LOGGER.info(
+                "Skipping persisted search index cache because FAISS semantic index is enabled"
             )
-            for item in self.session.scalars(stmt)
-        ]
+            return
 
-        cache = HybridSearchIndex(documents)
-        self.__class__._hybrid_index_cache = cache
-        self.__class__._hybrid_index_signature = signature
-        self.__class__._search_vocabulary_cache = None
-        return cache
+        payload = {
+            "version": cls._INDEX_CACHE_FORMAT_VERSION,
+            "signature": signature,
+            "requested_semantic_backend": settings.search_semantic_backend.strip().lower(),
+            "index": index,
+        }
+
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with cache_path.open("wb") as handle:
+                pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as exc:
+            LOGGER.warning("Failed to persist search index cache %s: %s", cache_path, exc)
+            return
+
+        LOGGER.info("Persisted search index cache to %s", cache_path)
 
     def _get_catalog_signature(self) -> tuple[int, datetime | None]:
         stmt = select(

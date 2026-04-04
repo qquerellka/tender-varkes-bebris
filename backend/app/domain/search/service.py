@@ -78,6 +78,12 @@ class SearchService:
         self.search_repository = search_repository
         self.ranking_provider = ranking_provider
 
+    def _release_read_connection(self) -> None:
+        try:
+            self.search_repository.session.rollback()
+        except Exception:
+            pass
+
     @staticmethod
     def _format_query_label(query: str | None) -> str:
         return f"«{query}»" if query else "без запроса"
@@ -336,6 +342,7 @@ class SearchService:
         ranking_query_terms = list(
             dict.fromkeys([*expanded_query_terms, *morphology_query_terms, *synonym_terms])
         )
+        retrieval_only_mode = settings.ranking_mode.strip().lower() == "retrieval_only"
         profile = self._get_profile_for_actor(actor)
 
         items = self.catalog_service.search_ste_candidates(
@@ -361,23 +368,27 @@ class SearchService:
                 retrieval_channel_scores=item.retrieval_channel_scores,
                 retrieval_channel_ranks=item.retrieval_channel_ranks,
                 retrieval_features=item.retrieval_features,
+                retrieval_only=retrieval_only_mode,
             )
             for item in items
         ]
         candidates = [candidate for candidate in candidates if candidate.score > 0]
-        ranked_items = self.ranking_provider.rank(
-            RankingRequest(
-                query=RankingQueryContext(
-                    original=payload.query,
-                    normalized=normalized_query,
-                    corrected=corrected_query,
-                    applied_synonyms=applied_synonyms,
-                ),
-                actor=actor,
-                profile=profile,
-                candidates=candidates,
+        if retrieval_only_mode:
+            ranked_items = sorted(candidates, key=lambda item: item.score, reverse=True)
+        else:
+            ranked_items = self.ranking_provider.rank(
+                RankingRequest(
+                    query=RankingQueryContext(
+                        original=payload.query,
+                        normalized=normalized_query,
+                        corrected=corrected_query,
+                        applied_synonyms=applied_synonyms,
+                    ),
+                    actor=actor,
+                    profile=profile,
+                    candidates=candidates,
+                )
             )
-        )
 
         return {
             "normalized_query": normalized_query,
@@ -409,7 +420,7 @@ class SearchService:
         if not base_terms:
             return []
 
-        search_vocabulary = self.search_repository.get_search_vocabulary()
+        search_vocabulary = self.search_repository.get_search_spell_vocabulary()
         fuzzy_terms = expand_fuzzy_term_variants(base_terms, search_vocabulary)
         expanded_fuzzy_terms = expand_term_variants(fuzzy_terms)
         blocked = set(blocked_terms)
@@ -440,7 +451,7 @@ class SearchService:
 
     def _resolve_query(self, query: str) -> tuple[str, str | None, str]:
         normalized_query = normalize_query(query)
-        search_vocabulary = self.search_repository.get_search_vocabulary()
+        search_vocabulary = self.search_repository.get_search_spell_vocabulary()
 
         spell_corrections = self.search_repository.get_spell_corrections(normalized_query)
         spell_corrected_query = correct_query(normalized_query, spell_corrections)
@@ -523,6 +534,7 @@ class SearchService:
         actor: CurrentActor,
     ) -> SearchResponse:
         prepared = self._prepare_search_execution(payload, actor)
+        self._release_read_connection()
 
         session = self.search_repository.create_session(
             user_id=actor.user_id,
@@ -715,6 +727,7 @@ class SearchService:
             seen_labels.add(key)
             deduplicated.append(item)
 
+        self._release_read_connection()
         return SearchSuggestionsResponse(
             items=deduplicated[:8],
             meta=SearchSuggestionsMeta(
@@ -728,6 +741,7 @@ class SearchService:
 
     def get_spellcheck(self, query: str) -> SpellcheckResponse:
         normalized_query, corrected_query, _ = self._resolve_query(query)
+        self._release_read_connection()
         return SpellcheckResponse(
             original_query=query,
             corrected_query=corrected_query or correct_keyboard_layout(normalized_query),

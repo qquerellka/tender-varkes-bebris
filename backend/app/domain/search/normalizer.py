@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Iterable
 
@@ -156,6 +157,7 @@ TERM_EXPANSIONS = {
     "гсм": ["горюче смазочные материалы"],
     "сиз": ["средства индивидуальной защиты"],
 }
+MAX_SEARCH_TOKEN_LENGTH = 64
 
 PHRASE_NORMALIZATION_PATTERNS = (
     (re.compile(r"\bканц[\w-]*\s+товар[\w-]*\b"), "канцтовары"),
@@ -251,6 +253,12 @@ CYRILLIC_ABBREVIATIONS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class SpellVocabularyIndex:
+    tokens: frozenset[str]
+    signature_buckets: dict[tuple[str, int], tuple[str, ...]]
+
+
 def normalize_query(value: str) -> str:
     value = value.strip().lower().replace("ё", "е")
     value = GRAMMAGE_PATTERN.sub("гм2", value)
@@ -278,10 +286,11 @@ def correct_query(value: str, corrections: dict[str, str] | None = None) -> str 
 
 def correct_query_fuzzy(
     value: str,
-    vocabulary: Iterable[str] | None = None,
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None = None,
 ) -> str | None:
     normalized = normalize_query(value)
-    spell_vocabulary = _build_spell_vocabulary(vocabulary)
+    spell_vocabulary_index = _ensure_spell_vocabulary_index(vocabulary)
+    spell_vocabulary = spell_vocabulary_index.tokens
     corrected_tokens: list[str] = []
     changed = False
 
@@ -295,7 +304,7 @@ def correct_query_fuzzy(
             corrected_tokens.append(token)
             continue
 
-        replacement = _best_fuzzy_correction(token, spell_vocabulary)
+        replacement = _best_fuzzy_correction(token, spell_vocabulary_index)
         corrected_tokens.append(replacement or token)
         changed = changed or replacement is not None
 
@@ -308,11 +317,12 @@ def correct_query_fuzzy(
 
 def expand_fuzzy_term_variants(
     terms: list[str],
-    vocabulary: Iterable[str] | None = None,
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None = None,
     *,
     limit_per_term: int = 2,
 ) -> list[str]:
-    spell_vocabulary = _build_spell_vocabulary(vocabulary)
+    spell_vocabulary_index = _ensure_spell_vocabulary_index(vocabulary)
+    spell_vocabulary = spell_vocabulary_index.tokens
     expanded: list[str] = []
 
     for value in terms:
@@ -327,7 +337,7 @@ def expand_fuzzy_term_variants(
 
             for candidate in _select_fuzzy_variants(
                 token,
-                spell_vocabulary,
+                spell_vocabulary_index,
                 limit=limit_per_term,
             ):
                 _append_variant(expanded, candidate)
@@ -364,6 +374,8 @@ def extract_query_terms(value: str, *, deduplicate: bool = True) -> list[str]:
             continue
         if len(normalized_token) == 1 and not normalized_token.isdigit():
             continue
+        if len(normalized_token) > MAX_SEARCH_TOKEN_LENGTH and not normalized_token.isdigit():
+            continue
         terms.append(normalized_token)
 
     if not deduplicate:
@@ -376,7 +388,11 @@ def extract_normalized_tokens(
     *,
     deduplicate: bool = False,
 ) -> list[str]:
-    tokens = [token for token in normalize_query(value).split() if token]
+    tokens = [
+        token
+        for token in normalize_query(value).split()
+        if token and (len(token) <= MAX_SEARCH_TOKEN_LENGTH or token.isdigit())
+    ]
     if not deduplicate:
         return tokens
     return list(dict.fromkeys(tokens))
@@ -464,10 +480,13 @@ def _get_morph_analyzer() -> Any | None:
         return None
 
 
+@lru_cache(maxsize=200_000)
 def _lemmatize_russian_term(term: str) -> str | None:
     if term in CYRILLIC_ABBREVIATIONS:
         return None
     if not PURE_CYRILLIC_TOKEN_PATTERN.fullmatch(term):
+        return None
+    if len(term) > MAX_SEARCH_TOKEN_LENGTH:
         return None
 
     analyzer = _get_morph_analyzer()
@@ -488,8 +507,11 @@ def _lemmatize_russian_term(term: str) -> str | None:
     return lemma
 
 
+@lru_cache(maxsize=200_000)
 def _expand_russian_fallback_variants(term: str) -> list[str]:
     if not PURE_CYRILLIC_TOKEN_PATTERN.fullmatch(term):
+        return []
+    if len(term) > MAX_SEARCH_TOKEN_LENGTH:
         return []
 
     variants: list[str] = []
@@ -542,7 +564,47 @@ def _build_spell_vocabulary(vocabulary: Iterable[str] | None) -> set[str]:
     return normalized_vocabulary
 
 
-def _best_fuzzy_correction(token: str, vocabulary: set[str]) -> str | None:
+def build_spell_vocabulary_index(
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None,
+) -> SpellVocabularyIndex:
+    if isinstance(vocabulary, SpellVocabularyIndex):
+        return vocabulary
+
+    normalized_vocabulary = _build_spell_vocabulary(vocabulary)
+    signature_buckets: dict[tuple[str, int], list[str]] = {}
+
+    for token in normalized_vocabulary:
+        signature = _spell_signature(token)
+        if not signature:
+            continue
+
+        signature_length = len(signature)
+        prefixes = {signature[:1]}
+        if signature_length >= 2:
+            prefixes.add(signature[:2])
+
+        for prefix in prefixes:
+            signature_buckets.setdefault((prefix, signature_length), []).append(token)
+
+    return SpellVocabularyIndex(
+        tokens=frozenset(normalized_vocabulary),
+        signature_buckets={
+            key: tuple(sorted(values))
+            for key, values in signature_buckets.items()
+        },
+    )
+
+
+def _ensure_spell_vocabulary_index(
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None,
+) -> SpellVocabularyIndex:
+    return build_spell_vocabulary_index(vocabulary)
+
+
+def _best_fuzzy_correction(
+    token: str,
+    vocabulary: SpellVocabularyIndex,
+) -> str | None:
     candidates = _rank_fuzzy_candidates(token, vocabulary)
     if not candidates:
         return None
@@ -566,7 +628,7 @@ def _best_fuzzy_correction(token: str, vocabulary: set[str]) -> str | None:
 
 def _select_fuzzy_variants(
     token: str,
-    vocabulary: set[str],
+    vocabulary: SpellVocabularyIndex,
     *,
     limit: int,
 ) -> list[str]:
@@ -594,13 +656,22 @@ def _select_fuzzy_variants(
 
 def _rank_fuzzy_candidates(
     token: str,
-    vocabulary: set[str],
+    vocabulary: SpellVocabularyIndex,
 ) -> list[tuple[int, int, int, str]]:
     token_signature = _spell_signature(token)
     allowed_distance = _max_edit_distance(token_signature)
     candidates: list[tuple[int, int, int, str]] = []
 
-    for candidate in vocabulary:
+    min_length = max(3, len(token_signature) - allowed_distance)
+    max_length = len(token_signature) + allowed_distance
+    candidate_pool = _lookup_fuzzy_candidate_pool(
+        token_signature=token_signature,
+        vocabulary=vocabulary,
+        min_length=min_length,
+        max_length=max_length,
+    )
+
+    for candidate in candidate_pool:
         if candidate == token:
             continue
         if abs(len(candidate) - len(token)) > allowed_distance:
@@ -645,6 +716,37 @@ def _rank_fuzzy_candidates(
 
     candidates.sort()
     return candidates
+
+
+def _lookup_fuzzy_candidate_pool(
+    *,
+    token_signature: str,
+    vocabulary: SpellVocabularyIndex,
+    min_length: int,
+    max_length: int,
+) -> tuple[str, ...]:
+    if not token_signature:
+        return ()
+
+    for prefix_length in (2, 1):
+        if len(token_signature) < prefix_length:
+            continue
+
+        prefix = token_signature[:prefix_length]
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        for candidate_length in range(min_length, max_length + 1):
+            for candidate in vocabulary.signature_buckets.get((prefix, candidate_length), ()):
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                candidates.append(candidate)
+
+        if candidates:
+            return tuple(candidates)
+
+    return ()
 
 
 def _spell_signature(value: str) -> str:

@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+import logging
 import math
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
-from scipy.sparse import hstack
-from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.preprocessing import normalize as l2_normalize
+
+try:  # pragma: no cover - optional dependency for semantic fallback only
+    from scipy.sparse import hstack
+except ImportError:  # pragma: no cover - lexical retrieval still works without it
+    hstack = None
+
+try:  # pragma: no cover - optional dependency for semantic fallback only
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+except ImportError:  # pragma: no cover - lexical retrieval still works without it
+    TruncatedSVD = None
+    TfidfVectorizer = None
 
 from app.core.config import settings
 from app.domain.search.normalizer import (
@@ -26,7 +36,19 @@ from app.domain.search.semantic import (
     encode_bge_m3_texts,
 )
 
+SEMANTIC_BACKEND_DISABLED = "disabled"
+LOGGER = logging.getLogger(__name__)
+
 FIELD_NAMES = ("title", "category", "attributes", "description", "supplier")
+FIELD_INDEX_TEXT_LIMITS = {
+    "title": 512,
+    "category": 256,
+    "attributes": 4096,
+    "description": 4096,
+    "supplier": 256,
+}
+RETRIEVAL_MIN_CANDIDATE_POOL = 300
+RETRIEVAL_MAX_CANDIDATE_POOL = 1200
 FIELD_WEIGHTS = {
     "title": 2.4,
     "attributes": 1.55,
@@ -108,8 +130,28 @@ class _IndexedDocument:
 
 
 class HybridSearchIndex:
-    def __init__(self, documents: Iterable[SearchDocument]) -> None:
-        indexed_documents = [self._index_document(document) for document in documents]
+    def __init__(
+        self,
+        documents: Iterable[SearchDocument],
+        *,
+        enable_semantic: bool = True,
+        progress: bool = False,
+    ) -> None:
+        started_at = time.perf_counter()
+        source_documents = list(documents)
+        indexed_documents: list[_IndexedDocument] = []
+        total_documents = len(source_documents)
+        for index, document in enumerate(source_documents, start=1):
+            indexed_documents.append(self._index_document(document))
+            if progress and (
+                index == 1 or index % 1000 == 0 or index == total_documents
+            ):
+                self._emit_progress(
+                    "index-documents",
+                    index=index,
+                    total=total_documents,
+                    started_at=started_at,
+                )
         self.documents = indexed_documents
         self.documents_by_id = {
             document.payload.id: document
@@ -126,21 +168,39 @@ class HybridSearchIndex:
             self._bm25_doc_lengths,
             self._bm25_avg_doc_length,
             self._bm25_idf,
-        ) = self._build_fielded_bm25_index(use_lemmas=False)
+        ) = self._build_fielded_bm25_index(use_lemmas=False, progress=progress)
         (
             self._lemma_bm25_postings,
             self._lemma_bm25_doc_lengths,
             self._lemma_bm25_avg_doc_length,
             self._lemma_bm25_idf,
-        ) = self._build_fielded_bm25_index(use_lemmas=True)
+        ) = self._build_fielded_bm25_index(use_lemmas=True, progress=progress)
 
-        self._semantic_backend = SEMANTIC_BACKEND_FALLBACK
+        self._semantic_enabled = (
+            enable_semantic
+            and settings.search_semantic_backend.strip().lower() != SEMANTIC_BACKEND_DISABLED
+        )
+        self._semantic_backend = (
+            SEMANTIC_BACKEND_FALLBACK
+            if self._semantic_enabled
+            else SEMANTIC_BACKEND_DISABLED
+        )
         self._semantic_faiss_index = None
-        self._semantic_word_vectorizer: TfidfVectorizer | None = None
-        self._semantic_char_vectorizer: TfidfVectorizer | None = None
-        self._semantic_svd: TruncatedSVD | None = None
+        self._semantic_word_vectorizer: Any | None = None
+        self._semantic_char_vectorizer: Any | None = None
+        self._semantic_svd: Any | None = None
         self._semantic_matrix = np.zeros((len(indexed_documents), 0), dtype=float)
-        self._build_semantic_index()
+        if self._semantic_enabled:
+            self._build_semantic_index()
+
+        if progress:
+            elapsed = time.perf_counter() - started_at
+            print(
+                "[retrieval-index] ready "
+                f"documents={len(indexed_documents)} "
+                f"elapsed={_format_progress_seconds(elapsed)}",
+                flush=True,
+            )
 
     def search(
         self,
@@ -154,11 +214,13 @@ class HybridSearchIndex:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        allowed_document_ids: set[str] | None = None,
         limit: int = 80,
     ) -> list[RetrievalResult]:
         allowed_positions = self._filter_positions(
             category_id=category_id,
             supplier_id=supplier_id,
+            allowed_document_ids=allowed_document_ids,
         )
         if not allowed_positions:
             return []
@@ -173,62 +235,140 @@ class HybridSearchIndex:
         trigram_queries = self._prepare_text_queries(trigram_terms)
         semantic_queries = self._prepare_text_queries(semantic_texts)
         query_analysis = structured_query or analyze_search_text(" ".join(lexical_terms))
+        expanded_limit = max(limit * 2, 60)
 
-        channel_results: dict[str, list[_ChannelHit]] = {}
+        if strict_match:
+            channel_results: dict[str, list[_ChannelHit]] = {}
+            if query_analysis.all_terms:
+                channel_results["exact_structured"] = self._retrieve_exact_structured(
+                    analysis=query_analysis,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                )
+                attribute_hits = self._retrieve_attribute(
+                    analysis=query_analysis,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                )
+                if attribute_hits:
+                    channel_results["attribute"] = attribute_hits
 
-        if query_analysis.all_terms:
-            channel_results["exact_structured"] = self._retrieve_exact_structured(
-                analysis=query_analysis,
-                allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
-            )
-            attribute_hits = self._retrieve_attribute(
-                analysis=query_analysis,
-                allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
-            )
-            if attribute_hits:
-                channel_results["attribute"] = attribute_hits
+            if lexical_tokens:
+                channel_results["bm25"] = self._retrieve_bm25(
+                    tokens=lexical_tokens,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                    use_lemmas=False,
+                )
+
+            if morphology_tokens:
+                channel_results["morphology"] = self._retrieve_bm25(
+                    tokens=morphology_tokens,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                    use_lemmas=True,
+                )
+
+            return self._rrf_merge(channel_results, limit=limit)
+
+        cheap_channel_results: dict[str, list[_ChannelHit]] = {}
 
         if lexical_tokens:
-            channel_results["bm25"] = self._retrieve_bm25(
+            cheap_channel_results["bm25"] = self._retrieve_bm25(
                 tokens=lexical_tokens,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
                 use_lemmas=False,
             )
 
         if morphology_tokens:
-            channel_results["morphology"] = self._retrieve_bm25(
+            cheap_channel_results["morphology"] = self._retrieve_bm25(
                 tokens=morphology_tokens,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
                 use_lemmas=True,
             )
 
-        if not strict_match and synonym_tokens:
-            channel_results["synonym_bm25"] = self._retrieve_bm25(
+        if synonym_tokens:
+            cheap_channel_results["synonym_bm25"] = self._retrieve_bm25(
                 tokens=synonym_tokens,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
                 use_lemmas=False,
             )
 
-        if not strict_match and trigram_queries:
-            channel_results["fuzzy"] = self._retrieve_fuzzy(
-                queries=trigram_queries,
-                allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
-            )
-
-        if not strict_match and semantic_queries:
-            channel_results["semantic"] = self._retrieve_semantic(
+        if self._semantic_enabled and semantic_queries:
+            cheap_channel_results["semantic"] = self._retrieve_semantic(
                 queries=semantic_queries,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
             )
 
-        return self._rrf_merge(channel_results, limit=limit)
+        candidate_pool_limit = min(
+            RETRIEVAL_MAX_CANDIDATE_POOL,
+            max(limit * 8, RETRIEVAL_MIN_CANDIDATE_POOL),
+        )
+        shortlist_results = self._rrf_merge(
+            cheap_channel_results,
+            limit=candidate_pool_limit,
+        )
+        shortlist_positions = {
+            self._position_by_id[result.document_id]
+            for result in shortlist_results
+            if result.document_id in self._position_by_id
+        }
+
+        if not shortlist_positions and trigram_queries:
+            fuzzy_fallback = self._retrieve_fuzzy(
+                queries=trigram_queries,
+                allowed_positions=allowed_positions,
+                limit=candidate_pool_limit,
+            )
+            shortlist_positions = {
+                self._position_by_id[hit.document_id]
+                for hit in fuzzy_fallback
+                if hit.document_id in self._position_by_id
+            }
+            if fuzzy_fallback:
+                cheap_channel_results["fuzzy"] = fuzzy_fallback
+
+        if not shortlist_positions:
+            return shortlist_results[:limit]
+
+        shortlist_channel_results = {
+            channel_name: [
+                hit
+                for hit in ranking
+                if self._position_by_id.get(hit.document_id) in shortlist_positions
+            ]
+            for channel_name, ranking in cheap_channel_results.items()
+            if ranking
+        }
+
+        if query_analysis.all_terms:
+            shortlist_channel_results["exact_structured"] = self._retrieve_exact_structured(
+                analysis=query_analysis,
+                allowed_positions=shortlist_positions,
+                limit=expanded_limit,
+            )
+            attribute_hits = self._retrieve_attribute(
+                analysis=query_analysis,
+                allowed_positions=shortlist_positions,
+                limit=expanded_limit,
+            )
+            if attribute_hits:
+                shortlist_channel_results["attribute"] = attribute_hits
+
+        if trigram_queries and "fuzzy" not in shortlist_channel_results:
+            fuzzy_hits = self._retrieve_fuzzy(
+                queries=trigram_queries,
+                allowed_positions=shortlist_positions,
+                limit=expanded_limit,
+            )
+            if fuzzy_hits:
+                shortlist_channel_results["fuzzy"] = fuzzy_hits
+
+        return self._rrf_merge(shortlist_channel_results, limit=limit)
 
     @staticmethod
     def _index_document(document: SearchDocument) -> _IndexedDocument:
@@ -237,12 +377,16 @@ class HybridSearchIndex:
             for key, value in document.attributes.items()
             if key or value
         )
+        raw_field_texts = {
+            "title": document.title,
+            "category": document.category_name,
+            "attributes": attributes_text,
+            "description": document.description,
+            "supplier": document.supplier_name,
+        }
         field_texts = {
-            "title": normalize_query(document.title),
-            "category": normalize_query(document.category_name),
-            "attributes": normalize_query(attributes_text),
-            "description": normalize_query(document.description),
-            "supplier": normalize_query(document.supplier_name),
+            field_name: normalize_query(raw_value[: FIELD_INDEX_TEXT_LIMITS[field_name]])
+            for field_name, raw_value in raw_field_texts.items()
         }
 
         field_terms = {
@@ -317,10 +461,13 @@ class HybridSearchIndex:
         *,
         category_id: str | None,
         supplier_id: str | None,
+        allowed_document_ids: set[str] | None = None,
     ) -> set[int]:
         positions: set[int] = set()
         for position, document in enumerate(self.documents):
             payload = document.payload
+            if allowed_document_ids is not None and payload.id not in allowed_document_ids:
+                continue
             if category_id and payload.category_id != category_id:
                 continue
             if supplier_id and payload.supplier_id != supplier_id:
@@ -332,6 +479,7 @@ class HybridSearchIndex:
         self,
         *,
         use_lemmas: bool,
+        progress: bool = False,
     ) -> tuple[
         dict[str, dict[str, list[tuple[int, int]]]],
         dict[str, np.ndarray],
@@ -353,8 +501,9 @@ class HybridSearchIndex:
             return postings, doc_lengths, avg_doc_lengths, idf_by_field
 
         document_count = max(len(self.documents), 1)
+        bm25_started_at = time.perf_counter()
 
-        for field_name in FIELD_NAMES:
+        for field_index, field_name in enumerate(FIELD_NAMES, start=1):
             document_frequencies: Counter[str] = Counter()
             for position, document in enumerate(self.documents):
                 tokens = (
@@ -377,7 +526,40 @@ class HybridSearchIndex:
                 denominator = frequency + 0.5
                 idf_by_field[field_name][token] = math.log1p(numerator / denominator)
 
+            if progress:
+                mode = "lemma" if use_lemmas else "lexical"
+                elapsed = time.perf_counter() - bm25_started_at
+                print(
+                    "[retrieval-index] bm25 "
+                    f"mode={mode} "
+                    f"field={field_name} "
+                    f"{field_index}/{len(FIELD_NAMES)} "
+                    f"elapsed={_format_progress_seconds(elapsed)}",
+                    flush=True,
+                )
+
         return postings, doc_lengths, avg_doc_lengths, idf_by_field
+
+    @staticmethod
+    def _emit_progress(
+        stage: str,
+        *,
+        index: int,
+        total: int,
+        started_at: float,
+    ) -> None:
+        elapsed = time.perf_counter() - started_at
+        rate = index / elapsed if elapsed > 0 else 0.0
+        remaining = ((total - index) / rate) if rate > 0 else 0.0
+        print(
+            "[retrieval-index] "
+            f"{stage} "
+            f"{index}/{total} "
+            f"({(index / max(total, 1)) * 100:.1f}%) "
+            f"elapsed={_format_progress_seconds(elapsed)} "
+            f"eta={_format_progress_seconds(remaining)}",
+            flush=True,
+        )
 
     def _build_semantic_index(self) -> None:
         if not self.documents:
@@ -429,6 +611,18 @@ class HybridSearchIndex:
         return True
 
     def _build_fallback_semantic_index(self, semantic_corpus: list[str]) -> None:
+        if TfidfVectorizer is None or hstack is None:
+            LOGGER.warning(
+                "Semantic fallback is disabled because scipy/sklearn are not installed."
+            )
+            self._semantic_backend = SEMANTIC_BACKEND_DISABLED
+            self._semantic_matrix = np.zeros((len(self.documents), 0), dtype=float)
+            self._semantic_faiss_index = None
+            self._semantic_word_vectorizer = None
+            self._semantic_char_vectorizer = None
+            self._semantic_svd = None
+            return
+
         self._semantic_backend = SEMANTIC_BACKEND_FALLBACK
 
         self._semantic_word_vectorizer = TfidfVectorizer(
@@ -462,7 +656,7 @@ class HybridSearchIndex:
         else:
             dense = semantic_matrix.toarray()
 
-        self._semantic_matrix = l2_normalize(dense)
+        self._semantic_matrix = _l2_normalize(dense)
         self._semantic_faiss_index = None
 
     def _retrieve_bm25(
@@ -847,7 +1041,7 @@ class HybridSearchIndex:
         else:
             dense_query = sparse_query.toarray()
 
-        return l2_normalize(dense_query)
+        return _l2_normalize(dense_query)
 
     def _search_semantic_with_faiss(
         self,
@@ -1010,6 +1204,21 @@ def _count_matching_constraints(
         if constraint.value in document_tokens and constraint.unit in document_terms:
             matches += 1
     return matches
+
+
+def _l2_normalize(matrix: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    safe_norms = np.where(norms > 0, norms, 1.0)
+    return matrix / safe_norms
+
+
+def _format_progress_seconds(value: float) -> str:
+    total_seconds = max(int(value), 0)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def _build_trigrams(value: str) -> frozenset[str]:

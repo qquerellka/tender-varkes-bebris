@@ -1,3 +1,5 @@
+import threading
+
 from app.db.repositories.catalog import CatalogRepository
 from app.db.repositories.search import SearchRepository
 from app.domain.catalog.schemas import (
@@ -20,6 +22,10 @@ from app.domain.search.normalizer import extract_query_terms
 
 
 class CatalogService:
+    _cache_lock = threading.Lock()
+    _categories_cache: tuple[CategoryRead, ...] | None = None
+    _suppliers_cache: tuple[SupplierRead, ...] | None = None
+
     def __init__(
         self,
         repository: CatalogRepository,
@@ -29,23 +35,41 @@ class CatalogService:
         self.search_repository = search_repository
 
     def list_categories(self) -> list[CategoryRead]:
-        return [
-            CategoryRead(
-                id=item.id,
-                name=item.name,
-                parent_id=item.parent_id,
-            )
-            for item in self.repository.list_categories()
-        ]
+        cache = self.__class__._categories_cache
+        if cache is not None:
+            return list(cache)
+
+        with self.__class__._cache_lock:
+            cache = self.__class__._categories_cache
+            if cache is None:
+                cache = tuple(
+                    CategoryRead(
+                        id=item.id,
+                        name=item.name,
+                        parent_id=item.parent_id,
+                    )
+                    for item in self.repository.list_categories()
+                )
+                self.__class__._categories_cache = cache
+        return list(cache)
 
     def list_suppliers(self) -> list[SupplierRead]:
-        return [
-            SupplierRead(
-                id=item.id,
-                name=item.name,
-            )
-            for item in self.repository.list_suppliers()
-        ]
+        cache = self.__class__._suppliers_cache
+        if cache is not None:
+            return list(cache)
+
+        with self.__class__._cache_lock:
+            cache = self.__class__._suppliers_cache
+            if cache is None:
+                cache = tuple(
+                    SupplierRead(
+                        id=item.id,
+                        name=item.name,
+                    )
+                    for item in self.repository.list_suppliers()
+                )
+                self.__class__._suppliers_cache = cache
+        return list(cache)
 
     def get_catalog_summary(self, user_id: str) -> CatalogSummaryRead:
         summary = self.repository.get_catalog_summary(user_id=user_id)

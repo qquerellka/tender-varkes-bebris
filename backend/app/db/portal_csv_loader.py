@@ -78,7 +78,8 @@ class SteSample:
 
 
 def _normalize_space(value: str) -> str:
-    return SPACE_RE.sub(" ", value.replace("\u00a0", " ")).strip()
+    sanitized = value.replace("\x00", "").replace("\u00a0", " ")
+    return SPACE_RE.sub(" ", sanitized).strip()
 
 
 def _stable_id(prefix: str, value: str) -> str:
@@ -91,7 +92,7 @@ def _extract_tokens(value: str) -> list[str]:
 
 
 def _parse_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value)
+    return datetime.fromisoformat(_normalize_space(value))
 
 
 def _parse_attributes(raw_value: str) -> dict[str, str]:
@@ -157,6 +158,27 @@ def _flush_rows(
     rows.clear()
     session.commit()
     return inserted_count
+
+
+def _flush_catalog_buffers(
+    session: Session,
+    *,
+    pending_categories: list[dict],
+    pending_suppliers: list[dict],
+    pending_ste_items: list[dict],
+) -> dict[str, int]:
+    flushed = {
+        "categories": 0,
+        "suppliers": 0,
+        "ste_items_inserted": 0,
+    }
+    if pending_categories:
+        flushed["categories"] = _flush_rows(session, CategoryModel, pending_categories)
+    if pending_suppliers:
+        flushed["suppliers"] = _flush_rows(session, SupplierModel, pending_suppliers)
+    if pending_ste_items:
+        flushed["ste_items_inserted"] = _flush_rows(session, STEItemModel, pending_ste_items)
+    return flushed
 
 
 def _truncate_tables(session: Session) -> None:
@@ -382,11 +404,23 @@ def import_portal_csv_dataset(
             if len(pending_suppliers) >= 500:
                 stats["suppliers"] += _flush_rows(session, SupplierModel, pending_suppliers)
             if len(pending_ste_items) >= 2000:
-                stats["ste_items_inserted"] += _flush_rows(session, STEItemModel, pending_ste_items)
+                flushed = _flush_catalog_buffers(
+                    session,
+                    pending_categories=pending_categories,
+                    pending_suppliers=pending_suppliers,
+                    pending_ste_items=pending_ste_items,
+                )
+                for key, value in flushed.items():
+                    stats[key] += value
 
-    stats["categories"] += _flush_rows(session, CategoryModel, pending_categories)
-    stats["suppliers"] += _flush_rows(session, SupplierModel, pending_suppliers)
-    stats["ste_items_inserted"] += _flush_rows(session, STEItemModel, pending_ste_items)
+    flushed = _flush_catalog_buffers(
+        session,
+        pending_categories=pending_categories,
+        pending_suppliers=pending_suppliers,
+        pending_ste_items=pending_ste_items,
+    )
+    for key, value in flushed.items():
+        stats[key] += value
 
     buyer_counter: Counter[tuple[str, str, str]] = Counter()
     with contracts_csv_path.open("r", encoding="utf-8-sig", newline="") as handle:

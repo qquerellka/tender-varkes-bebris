@@ -8,11 +8,10 @@ class Settings(BaseSettings):
     ranking_mode: str = "baseline_personalized"
     ranking_provider: str = "noop"
     ml_artifacts_dir: str = "../ML/models/catboost_ranker_v1"
-    bootstrap_dataset: str = "demo"
-    synthetic_data_dir: str = "../ML/data/synthetic"
-    synthetic_data_truncate: bool = True
-    portal_ste_csv_path: str = "../СТЕ_20260403.csv"
-    portal_contracts_csv_path: str = "../Контракты_20260403.csv"
+    search_index_cache_path: str = ".cache/search/hybrid_search_index.pkl"
+    bootstrap_dataset: str = "portal_csv"
+    portal_ste_csv_path: str = "../ML/data/orig/СТЕ_20260403/СТЕ_20260403.csv"
+    portal_contracts_csv_path: str = "../ML/data/orig/Контракты_20260403/Контракты_20260403.csv"
     portal_import_truncate: bool = True
     portal_import_ste_limit: int = 0
     portal_import_contract_limit: int = 0
@@ -28,6 +27,10 @@ class Settings(BaseSettings):
     search_semantic_dense_min_score: float = 0.2
     search_semantic_fallback_min_score: float = 0.12
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/tender_search"
+    database_pool_size: int = 20
+    database_max_overflow: int = 20
+    database_pool_timeout: int = 60
+    database_pool_recycle: int = 1800
     demo_user_id: str = "demo_customer_transport"
     demo_organization_id: str = "demo_org_transport"
 

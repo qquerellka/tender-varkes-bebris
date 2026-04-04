@@ -197,6 +197,8 @@ class SearchStackStatusRead(BaseModel):
     ready: bool
     search_warmup: str
     ranking_warmup: str
+    search_warmup_duration_seconds: float | None = None
+    ranking_warmup_duration_seconds: float | None = None
     ranking_provider: str | None = None
     ranking_provider_mode: str | None = None
     search_documents_count: int | None = None

@@ -4,6 +4,7 @@ import json
 import importlib
 import re
 import sys
+import time
 import types
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +34,7 @@ def _install_backend_settings_stub() -> None:
     stub_config_module = types.ModuleType("app.core.config")
 
     class _StubSettings:
-        search_semantic_backend = "auto"
+        search_semantic_backend = "disabled"
         search_semantic_model_name = "BAAI/bge-m3"
         search_semantic_batch_size = 12
         search_semantic_max_length = 2048
@@ -76,7 +77,6 @@ CHANNEL_NAMES = (
     "morphology",
     "fuzzy",
     "synonym_bm25",
-    "semantic",
 )
 RETRIEVAL_REASON_COLUMNS = {
     "retrieval_exact": "retrieval_exact",
@@ -85,7 +85,6 @@ RETRIEVAL_REASON_COLUMNS = {
     "retrieval_morphology": "retrieval_morphology",
     "retrieval_fuzzy": "retrieval_fuzzy",
     "retrieval_synonym": "retrieval_synonym",
-    "retrieval_semantic": "retrieval_semantic",
     "retrieval_rrf": "retrieval_rrf",
 }
 RETRIEVAL_FEATURE_COLUMNS = (
@@ -98,9 +97,6 @@ RETRIEVAL_FEATURE_COLUMNS = (
     "appeared_in_multiple_channels",
     "strict_term_coverage",
     "fuzzy_edit_score",
-    "semantic_backend_bge_m3",
-    "semantic_backend_fallback",
-    "semantic_via_faiss",
 )
 
 
@@ -121,7 +117,6 @@ class PreparedQuery:
     morphology_terms: list[str]
     fuzzy_terms: list[str]
     synonym_terms: list[str]
-    semantic_texts: list[str]
     structured_query: SearchTextAnalysis
 
 
@@ -144,34 +139,134 @@ class RetrievalFeatureBuilder:
         supplier_by_id: dict[str, dict[str, str]],
         synonym_rows: list[dict[str, str]],
         spell_rows: list[dict[str, str]],
+        progress: bool = False,
     ) -> None:
+        started_at = time.perf_counter()
         self.documents = self._build_documents(
             item_by_id=item_by_id,
             category_by_id=category_by_id,
             supplier_by_id=supplier_by_id,
+            progress=progress,
         )
-        self.index = HybridSearchIndex(self.documents)
+        if progress:
+            print(
+                "[retrieval-builder] documents prepared "
+                f"count={len(self.documents)} "
+                f"elapsed={_format_seconds(time.perf_counter() - started_at)}",
+                flush=True,
+            )
+        self.index = HybridSearchIndex(self.documents, enable_semantic=False, progress=progress)
         self.synonym_map = self._build_synonym_map(synonym_rows)
         self.spell_corrections = self._build_spell_corrections(spell_rows)
+        if progress:
+            print(
+                "[retrieval-builder] synonyms and spell corrections prepared "
+                f"synonyms={len(self.synonym_map)} "
+                f"spell_corrections={len(self.spell_corrections)}",
+                flush=True,
+            )
         self.search_vocabulary = self._build_search_vocabulary(
             documents=self.documents,
             synonym_map=self.synonym_map,
             spell_corrections=self.spell_corrections,
+            progress=progress,
         )
+        if progress:
+            print(
+                "[retrieval-builder] search vocabulary ready "
+                f"tokens={len(self.search_vocabulary)} "
+                f"elapsed={_format_seconds(time.perf_counter() - started_at)}",
+                flush=True,
+            )
         self._query_cache: dict[tuple[str, str], SessionRetrievalFeatures] = {}
+
+    def search(
+        self,
+        *,
+        query: str,
+        normalized_query: str,
+        limit: int = 80,
+        strict_match: bool = False,
+        candidate_item_ids: set[str] | list[str] | tuple[str, ...] | None = None,
+    ) -> tuple[PreparedQuery, list[RetrievalResult]]:
+        prepared_query = self._prepare_query(query=query, normalized_query=normalized_query)
+        if not (
+            prepared_query.lexical_terms
+            or prepared_query.morphology_terms
+            or prepared_query.fuzzy_terms
+            or prepared_query.synonym_terms
+            or prepared_query.structured_query.normalized_text
+        ):
+            return prepared_query, []
+
+        allowed_document_ids = None
+        if candidate_item_ids is not None:
+            allowed_document_ids = set(candidate_item_ids)
+            if not allowed_document_ids:
+                return prepared_query, []
+        retrieval_results = self.index.search(
+            lexical_terms=prepared_query.lexical_terms,
+            morphology_terms=prepared_query.morphology_terms,
+            synonym_terms=prepared_query.synonym_terms,
+            trigram_terms=prepared_query.fuzzy_terms,
+            semantic_texts=[],
+            structured_query=prepared_query.structured_query,
+            strict_match=strict_match,
+            allowed_document_ids=allowed_document_ids,
+            limit=limit,
+        )
+        return prepared_query, retrieval_results
 
     def build_session_feature_map(
         self,
         session_queries: dict[str, tuple[str, str]],
+        *,
+        candidate_item_ids_by_session: dict[str, set[str]] | None = None,
+        progress_every: int = 0,
     ) -> dict[str, SessionRetrievalFeatures]:
         session_features: dict[str, SessionRetrievalFeatures] = {}
-        for session_id, (query, normalized_query) in session_queries.items():
-            cache_key = (query, normalized_query)
-            cached = self._query_cache.get(cache_key)
+        total = len(session_queries)
+        started_at = time.perf_counter()
+
+        for index, (session_id, (query, normalized_query)) in enumerate(
+            session_queries.items(),
+            start=1,
+        ):
+            candidate_item_ids = (
+                candidate_item_ids_by_session.get(session_id, set())
+                if candidate_item_ids_by_session is not None
+                else None
+            )
+            cache_key = (
+                None
+                if candidate_item_ids_by_session is not None
+                else (query, normalized_query)
+            )
+            cached = self._query_cache.get(cache_key) if cache_key is not None else None
             if cached is None:
-                cached = self._build_query_features(query=query, normalized_query=normalized_query)
-                self._query_cache[cache_key] = cached
+                cached = self._build_query_features(
+                    query=query,
+                    normalized_query=normalized_query,
+                    candidate_item_ids=candidate_item_ids,
+                )
+                if cache_key is not None:
+                    self._query_cache[cache_key] = cached
             session_features[session_id] = cached
+
+            if progress_every > 0 and (
+                index == 1 or index % progress_every == 0 or index == total
+            ):
+                elapsed = time.perf_counter() - started_at
+                rate = index / elapsed if elapsed > 0 else 0.0
+                remaining = ((total - index) / rate) if rate > 0 else 0.0
+                print(
+                    "[retrieval] sessions "
+                    f"{index}/{total} "
+                    f"({(index / max(total, 1)) * 100:.1f}%) "
+                    f"elapsed={_format_seconds(elapsed)} "
+                    f"eta={_format_seconds(remaining)}",
+                    flush=True,
+                )
         return session_features
 
     @staticmethod
@@ -180,9 +275,12 @@ class RetrievalFeatureBuilder:
         item_by_id: dict[str, dict[str, str]],
         category_by_id: dict[str, dict[str, str]],
         supplier_by_id: dict[str, dict[str, str]],
+        progress: bool = False,
     ) -> list[SearchDocument]:
         documents: list[SearchDocument] = []
-        for item in item_by_id.values():
+        total = len(item_by_id)
+        started_at = time.perf_counter()
+        for index, item in enumerate(item_by_id.values(), start=1):
             category = category_by_id.get(item.get("category_id", ""), {})
             supplier = supplier_by_id.get(item.get("supplier_id", ""), {})
             attributes = _safe_json(item.get("attributes_json"), default={})
@@ -201,6 +299,18 @@ class RetrievalFeatureBuilder:
                     status=item.get("status", "active"),
                 )
             )
+            if progress and (index == 1 or index % 5000 == 0 or index == total):
+                elapsed = time.perf_counter() - started_at
+                rate = index / elapsed if elapsed > 0 else 0.0
+                remaining = ((total - index) / rate) if rate > 0 else 0.0
+                print(
+                    "[retrieval-builder] documents "
+                    f"{index}/{total} "
+                    f"({(index / max(total, 1)) * 100:.1f}%) "
+                    f"elapsed={_format_seconds(elapsed)} "
+                    f"eta={_format_seconds(remaining)}",
+                    flush=True,
+                )
         return documents
 
     @staticmethod
@@ -243,8 +353,10 @@ class RetrievalFeatureBuilder:
         documents: list[SearchDocument],
         synonym_map: dict[str, list[SynonymExpansionRecord]],
         spell_corrections: dict[str, str],
+        progress: bool = False,
     ) -> set[str]:
         vocabulary: set[str] = set()
+        started_at = time.perf_counter()
 
         for wrong_term, correct_term in spell_corrections.items():
             vocabulary.update(_extract_vocab_tokens(wrong_term))
@@ -255,12 +367,25 @@ class RetrievalFeatureBuilder:
             for expansion in expansions:
                 vocabulary.update(_extract_vocab_tokens(expansion.synonym))
 
-        for document in documents:
+        total = len(documents)
+        for index, document in enumerate(documents, start=1):
             vocabulary.update(_extract_vocab_tokens(document.title))
             vocabulary.update(_extract_vocab_tokens(document.description))
             vocabulary.update(_extract_vocab_tokens(document.category_name))
             vocabulary.update(_extract_vocab_tokens(document.supplier_name))
             vocabulary.update(_extract_vocab_tokens(" ".join(document.attributes.values())))
+            if progress and (index == 1 or index % 5000 == 0 or index == total):
+                elapsed = time.perf_counter() - started_at
+                rate = index / elapsed if elapsed > 0 else 0.0
+                remaining = ((total - index) / rate) if rate > 0 else 0.0
+                print(
+                    "[retrieval-builder] vocabulary "
+                    f"{index}/{total} "
+                    f"({(index / max(total, 1)) * 100:.1f}%) "
+                    f"elapsed={_format_seconds(elapsed)} "
+                    f"eta={_format_seconds(remaining)}",
+                    flush=True,
+                )
 
         return vocabulary
 
@@ -269,14 +394,19 @@ class RetrievalFeatureBuilder:
         *,
         query: str,
         normalized_query: str,
+        candidate_item_ids: set[str] | None = None,
     ) -> SessionRetrievalFeatures:
-        prepared_query = self._prepare_query(query=query, normalized_query=normalized_query)
-        if not (
+        prepared_query, retrieval_results = self.search(
+            query=query,
+            normalized_query=normalized_query,
+            candidate_item_ids=candidate_item_ids,
+            limit=max(len(candidate_item_ids or self.documents), 1),
+        )
+        if not retrieval_results and not (
             prepared_query.lexical_terms
             or prepared_query.morphology_terms
             or prepared_query.fuzzy_terms
             or prepared_query.synonym_terms
-            or prepared_query.semantic_texts
             or prepared_query.structured_query.normalized_text
         ):
             return SessionRetrievalFeatures(
@@ -287,17 +417,6 @@ class RetrievalFeatureBuilder:
                 query_has_synonyms=float(bool(prepared_query.applied_synonyms)),
                 features_by_item_id={},
             )
-
-        retrieval_results = self.index.search(
-            lexical_terms=prepared_query.lexical_terms,
-            morphology_terms=prepared_query.morphology_terms,
-            synonym_terms=prepared_query.synonym_terms,
-            trigram_terms=prepared_query.fuzzy_terms,
-            semantic_texts=prepared_query.semantic_texts,
-            structured_query=prepared_query.structured_query,
-            strict_match=False,
-            limit=max(len(self.documents), 1),
-        )
 
         return SessionRetrievalFeatures(
             normalized_query=prepared_query.normalized_query,
@@ -410,12 +529,6 @@ class RetrievalFeatureBuilder:
             ],
             blocked_terms=search_terms,
         )
-        semantic_texts = self._build_semantic_query_texts(
-            effective_query,
-            normalized,
-            extra_values=applied_synonyms,
-        )
-
         return PreparedQuery(
             normalized_query=normalized,
             corrected_query=corrected_query,
@@ -424,7 +537,6 @@ class RetrievalFeatureBuilder:
             morphology_terms=morphology_terms,
             fuzzy_terms=fuzzy_terms,
             synonym_terms=synonym_query_terms,
-            semantic_texts=semantic_texts,
             structured_query=structured_query,
         )
 
@@ -471,15 +583,6 @@ class RetrievalFeatureBuilder:
         for values in term_groups:
             terms.extend(lemmatize_query_terms(values))
         return list(dict.fromkeys(term for term in terms if term))
-
-    @staticmethod
-    def _build_semantic_query_texts(
-        *values: str,
-        extra_values: list[str] | None = None,
-    ) -> list[str]:
-        semantic_texts = [value for value in values if value]
-        semantic_texts.extend(extra_values or [])
-        return list(dict.fromkeys(text for text in semantic_texts if text))
 
     @staticmethod
     def _result_to_feature_row(result: RetrievalResult) -> dict[str, float]:
@@ -532,3 +635,12 @@ def _extract_vocab_tokens(value: str | None) -> set[str]:
         for token in VOCAB_TOKEN_RE.findall(normalize_query(value))
         if len(token) >= 3 and not token.isdigit()
     }
+
+
+def _format_seconds(value: float) -> str:
+    total_seconds = max(int(value), 0)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"

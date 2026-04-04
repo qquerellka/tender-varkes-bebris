@@ -1,163 +1,83 @@
 # Tender Portal MVP
 
-MVP-каталог СТЕ для сценариев закупки, поиска и анализа конкурентов.
+MVP-каталог СТЕ для сценариев закупки, поиска и ML reranking.
 
 В репозитории есть:
-- `frontend` на `React + Vite + Ant Design + styled-components`
+- `frontend` на `React + Vite`
 - `backend` на `FastAPI + PostgreSQL + SQLAlchemy + Alembic`
-- demo-auth с готовыми пользователями
-- роли `customer` и `supplier`
-- `favorites`, `compare`, `cart`
-- supplier dashboard
-- rule-based personalization и опциональный ML reranking
+- `ML` со сборкой датасета из реальных CSV портала и обучением CatBoost reranker
+
+## Главное изменение
+
+Проект теперь работает в `orig-only` режиме:
+- synthetic dataset больше не используется
+- bootstrap работает только через `portal_csv`, без fallback на demo
+- основной источник ML-данных: `ML/data/orig`
+- ML-признаки не используют semantic feature columns
 
 ## Структура
 
 - [frontend/README.md](./frontend/README.md)
 - [backend/README.md](./backend/README.md)
 - [backend/ARCHITECTURE.md](./backend/ARCHITECTURE.md)
-- [backend/TELEMETRY_SPEC.md](./backend/TELEMETRY_SPEC.md)
-- [docker-compose.yml](./docker-compose.yml)
-- [Makefile](./Makefile)
+- [ML/README.md](./ML/README.md)
 
 ## Быстрый старт через Docker
-
-Это основной и самый простой сценарий запуска.
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Или через `Makefile`:
-
-```bash
-cp .env.example .env
-make up
-```
-
 После запуска:
 - frontend: `http://localhost:3000`
 - backend: `http://localhost:8000`
 - swagger: `http://localhost:8000/docs`
-- healthcheck: `http://localhost:8000/health`
 
-Что поднимется:
-- `postgres`
-- `backend`
-- `frontend`
+По умолчанию backend ожидает real CSV в:
+- `ML/data/orig/СТЕ_20260403/СТЕ_20260403.csv`
+- `ML/data/orig/Контракты_20260403/Контракты_20260403.csv`
 
-## Локальная разработка без Docker для frontend
+## Текущий runtime-профиль
 
-Если нужен живой Vite dev server, удобнее держать базу в Docker, а backend и frontend запускать локально.
+По умолчанию проект сейчас настроен под быстрый retrieval-first запуск на portal CSV:
+- bootstrap идёт через `portal_csv`, без synthetic fallback
+- основной режим ранжирования для локальной отладки: `RANKING_MODE=retrieval_only`
+- semantic retrieval можно отключить через `SEARCH_SEMANTIC_BACKEND=disabled`
+- search index сохраняется на диск и переиспользуется между рестартами контейнера
 
-### 1. Запустить PostgreSQL
+В `.env.example` выставлены dev-safe лимиты импорта:
+- `PORTAL_IMPORT_STE_LIMIT=10000`
+- `PORTAL_IMPORT_CONTRACT_LIMIT=10000`
 
-```bash
-cp .env.example .env
-docker compose up -d postgres
-```
+Это нужно, чтобы первый импорт и warmup были предсказуемыми на локальной машине. Для полного каталога увеличь лимиты или поставь `0`.
 
-### 2. Запустить backend
+## Что изменилось в поиске
 
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-cp .env.example .env
-alembic upgrade head
-python -m app.bootstrap
-uvicorn app.main:app --reload
-```
+- retrieval переписан под новый каталог из `ML/data/orig`
+- тяжёлые retrieval-каналы работают по shortlist кандидатов, а не по всему каталогу
+- typo/fuzzy correction больше не сканирует весь словарь на каждый запрос
+- search warmup пишет тайминг и может грузить уже сохранённый индекс вместо полного rebuild
+- backend использует более широкий DB connection pool для снижения `QueuePool timeout` под параллельными запросами
 
-### 3. Запустить frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Локально:
-- frontend dev server: обычно `http://localhost:5173`
-- backend API: `http://localhost:8000`
-
-Во время локальной разработки frontend проксирует `/api` и `/health` на backend.
-
-## Bootstrap данных
-
-По умолчанию проект не требует обязательного наличия больших CSV.
-
-- В Docker используется `BOOTSTRAP_DATASET=auto`
-- В таком режиме backend пытается загрузить:
-  1. portal CSV
-  2. synthetic dataset
-  3. demo data
-
-То есть приложение должно стартовать даже без файлов `СТЕ_20260403.csv` и `Контракты_20260403.csv`.
-
-## Импорт реальных CSV
-
-Если нужно загрузить реальные данные портала, положите рядом с корнем проекта:
-- `СТЕ_20260403.csv`
-- `Контракты_20260403.csv`
-
-Затем выполните:
-
-```bash
-cd backend
-source .venv/bin/activate
-alembic upgrade head
-python -m app.import_portal_csv \
-  --ste-csv ../СТЕ_20260403.csv \
-  --contracts-csv ../Контракты_20260403.csv
-```
-
-Или через `Makefile` backend:
-
-```bash
-cd backend
-make migrate
-make seed-portal
-```
-
-Если нужен bootstrap именно через CSV при старте backend, выставьте:
-
-```bash
-BOOTSTRAP_DATASET=portal_csv
-```
-
-## Полезные команды
+## ML workflow
 
 Из корня проекта:
 
 ```bash
-make up
-make down
-make restart
-make logs
-make backend-logs
-make frontend-logs
-make ps
-make build
+python ML/tools/build_portal_dataset.py
+python ML/tools/build_ml_splits.py --source-dir ML/data/orig/derived --output-dir ML/data/orig/derived/splits
+python ML/tools/train_ranker.py --splits-dir ML/data/orig/derived/splits --artifacts-dir ML/models/catboost_ranker_v1
 ```
 
-Из `backend`:
+После переобучения перезапусти backend:
 
 ```bash
-make install
-make db-up
-make migrate
-make seed
-make seed-portal
-make run
+docker compose restart backend
 ```
 
 ## Что важно знать
 
-- Docker-конфигурация по умолчанию включает ML provider `local_ml` и `BOOTSTRAP_DATASET=auto`.
-- Локальный backend без `.env` стартует с более консервативными дефолтами из кода.
-- Demo-auth не требует пароля и подходит только для MVP и демо.
-- Спецификация telemetry лежит в [backend/TELEMETRY_SPEC.md](./backend/TELEMETRY_SPEC.md).
-- Большие CSV, `.env`, `backend/.venv` и кэш уже исключены через [`.gitignore`](./.gitignore).
+- `BOOTSTRAP_DATASET` по умолчанию теперь `portal_csv`
+- `ML/models/catboost_ranker_v1` остается директорией артефактов для backend
+- offline ML pipeline использует только `orig`-данные и не добавляет semantic feature columns
