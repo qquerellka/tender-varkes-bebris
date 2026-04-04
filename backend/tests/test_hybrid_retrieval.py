@@ -130,7 +130,7 @@ class HybridRetrievalTests(unittest.TestCase):
 
         self.assertEqual(results[0].document_id, "ste_server")
         self.assertIn("retrieval_bm25", results[0].reasons)
-        self.assertIn("retrieval_semantic", results[0].reasons)
+        self.assertNotIn("retrieval_semantic", results[0].reasons)
         self.assertIn("retrieval_rrf", results[0].reasons)
         self.assertEqual(results[0].features["appeared_in_multiple_channels"], 1.0)
 
@@ -143,6 +143,9 @@ class HybridRetrievalTests(unittest.TestCase):
         self.assertEqual(set(document.field_texts), {"title", "attributes", "description"})
         self.assertEqual(set(document.field_term_sets), {"title", "category", "attributes"})
         self.assertEqual(set(document.field_lemma_sets), {"title", "category"})
+        self.assertEqual(document.payload.title, "")
+        self.assertEqual(document.payload.description, "")
+        self.assertEqual(document.payload.attributes, {})
 
     @patch("app.domain.search.retrieval.build_faiss_index", return_value=None)
     @patch(
@@ -192,10 +195,10 @@ class HybridRetrievalTests(unittest.TestCase):
             strict_match=False,
         )
 
-        self.assertEqual(index._semantic_backend, "bge_m3")
+        self.assertEqual(index._semantic_backend, "disabled")
         self.assertEqual(results[0].document_id, "ste_chair")
-        self.assertEqual(results[0].features["semantic_backend_bge_m3"], 1.0)
-        self.assertEqual(results[0].features["semantic_backend_fallback"], 0.0)
+        self.assertNotIn("semantic_backend_bge_m3", results[0].features)
+        self.assertNotIn("semantic_backend_fallback", results[0].features)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 from datetime import datetime
+import numpy as np
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, sentinel
 
 from app.db.repositories.search import SearchRepository
 from app.domain.search.retrieval import HybridSearchIndex, SearchDocument
@@ -64,6 +65,33 @@ class SearchRepositoryCacheTests(unittest.TestCase):
                 loaded_index = SearchRepository._load_persisted_hybrid_index(signature)
 
         self.assertIsNone(loaded_index)
+
+    @patch("app.domain.search.retrieval.build_faiss_index", return_value=sentinel.faiss_index)
+    def test_persisted_hybrid_index_keeps_semantic_disabled_after_load(self, _faiss_mock) -> None:
+        document = _sample_document()
+        signature = (1, document.updated_at)
+        index = HybridSearchIndex([document], enable_semantic=False)
+        index._semantic_backend = "bge_m3"
+        index._semantic_matrix = np.asarray([[1.0, 0.0]], dtype=np.float32)
+        index._semantic_faiss_index = object()
+
+        with TemporaryDirectory() as tmpdir, patch(
+            "app.db.repositories.search.settings.search_index_cache_path",
+            f"{tmpdir}/hybrid_search_index.pkl",
+        ), patch(
+            "app.db.repositories.search.settings.search_semantic_backend",
+            "bge_m3",
+        ), patch(
+            "app.domain.search.semantic.settings.search_semantic_use_faiss",
+            True,
+        ):
+            SearchRepository._save_persisted_hybrid_index(signature, index)
+            loaded_index = SearchRepository._load_persisted_hybrid_index(signature)
+
+        self.assertIsNotNone(loaded_index)
+        assert loaded_index is not None
+        self.assertEqual(loaded_index._semantic_backend, "disabled")
+        self.assertIsNone(loaded_index._semantic_faiss_index)
 
 
 class HybridSearchIndexSettingsTests(unittest.TestCase):

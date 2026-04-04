@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Iterable, Mapping
 
+from app.core.config import settings
+
 try:
     from pymorphy3 import MorphAnalyzer
 except ImportError:  # pragma: no cover - dependency is optional at import time
@@ -537,7 +539,7 @@ def _get_morph_analyzer() -> Any | None:
         return None
 
 
-@lru_cache(maxsize=200_000)
+@lru_cache(maxsize=settings.search_lemmatizer_cache_size)
 def _lemmatize_russian_term(term: str) -> str | None:
     if term in CYRILLIC_ABBREVIATIONS:
         return None
@@ -564,7 +566,7 @@ def _lemmatize_russian_term(term: str) -> str | None:
     return lemma
 
 
-@lru_cache(maxsize=200_000)
+@lru_cache(maxsize=settings.search_fallback_variant_cache_size)
 def _expand_russian_fallback_variants(term: str) -> list[str]:
     if not PURE_CYRILLIC_TOKEN_PATTERN.fullmatch(term):
         return []

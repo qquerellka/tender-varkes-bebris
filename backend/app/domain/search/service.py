@@ -487,7 +487,14 @@ class SearchService:
         retrieval_only_mode = settings.ranking_mode.strip().lower() == "retrieval_only"
         profile = self._get_profile_for_actor(actor)
 
-        items = self.catalog_service.search_ste_candidates(
+        if retrieval_only_mode:
+            return self._prepare_retrieval_only_execution(
+                payload=payload,
+                profile=profile,
+                query_context=query_context,
+            )
+
+        hits = self.search_repository.search_candidates(
             query_terms=query_context["search_terms"],
             morphology_query_terms=query_context["morphology_query_terms"],
             fuzzy_query_terms=query_context["fuzzy_search_terms"],
@@ -498,44 +505,90 @@ class SearchService:
             category_id=payload.filters.category_id,
             supplier_id=payload.filters.supplier_id,
         )
-        raw_candidates_count = len(items)
+        raw_candidates_count = len(hits)
         candidates = [
             build_candidate(
-                item=item,
+                item=hit.item,
                 normalized_query=query_context["effective_query"],
                 profile=profile,
                 query_terms=query_context["ranking_query_terms"],
-                retrieval_score=item.retrieval_score,
-                retrieval_reasons=item.retrieval_reasons,
-                retrieval_channel_scores=item.retrieval_channel_scores,
-                retrieval_channel_ranks=item.retrieval_channel_ranks,
-                retrieval_features=item.retrieval_features,
+                retrieval_score=hit.retrieval_score,
+                retrieval_reasons=hit.retrieval_reasons,
+                retrieval_channel_scores=hit.retrieval_channel_scores,
+                retrieval_channel_ranks=hit.retrieval_channel_ranks,
+                retrieval_features=hit.retrieval_features,
                 retrieval_only=retrieval_only_mode,
             )
-            for item in items
+            for hit in hits
         ]
         candidates = [candidate for candidate in candidates if candidate.score > 0]
-        if retrieval_only_mode:
-            ranked_items = sorted(candidates, key=lambda item: item.score, reverse=True)
-        else:
-            ranked_items = self.ranking_provider.rank(
-                RankingRequest(
-                    query=RankingQueryContext(
-                        original=payload.query,
-                        normalized=query_context["normalized_query"],
-                        corrected=query_context["corrected_query"],
-                        applied_synonyms=query_context["applied_synonyms"],
-                    ),
-                    actor=actor,
-                    profile=profile,
-                    candidates=candidates,
-                )
+        ranked_items = self.ranking_provider.rank(
+            RankingRequest(
+                query=RankingQueryContext(
+                    original=payload.query,
+                    normalized=query_context["normalized_query"],
+                    corrected=query_context["corrected_query"],
+                    applied_synonyms=query_context["applied_synonyms"],
+                ),
+                actor=actor,
+                profile=profile,
+                candidates=candidates,
             )
+        )
 
         return {
             **query_context,
             "profile": profile,
             "candidates": candidates,
+            "ranked_items": ranked_items,
+            "raw_candidates_count": raw_candidates_count,
+        }
+
+    def _prepare_retrieval_only_execution(
+        self,
+        *,
+        payload: SearchRequest,
+        profile,
+        query_context: dict,
+    ) -> dict:
+        retrieval_refs = self.search_repository.search_candidate_refs(
+            query_terms=query_context["search_terms"],
+            morphology_query_terms=query_context["morphology_query_terms"],
+            fuzzy_query_terms=query_context["fuzzy_search_terms"],
+            synonym_query_terms=query_context["synonym_query_terms"],
+            semantic_query_texts=query_context["semantic_query_texts"],
+            structured_query=query_context["structured_query"],
+            strict_match=payload.filters.strict_match,
+            category_id=payload.filters.category_id,
+            supplier_id=payload.filters.supplier_id,
+        )
+        raw_candidates_count = len(retrieval_refs)
+        items_by_id = self.search_repository.load_search_item_snapshots(
+            [item.document_id for item in retrieval_refs]
+        )
+
+        ranked_items = [
+            build_candidate(
+                item=item,
+                normalized_query=query_context["effective_query"],
+                profile=profile,
+                query_terms=query_context["ranking_query_terms"],
+                retrieval_score=retrieval_ref.retrieval_score,
+                retrieval_reasons=retrieval_ref.retrieval_reasons,
+                retrieval_channel_scores=retrieval_ref.retrieval_channel_scores,
+                retrieval_channel_ranks=retrieval_ref.retrieval_channel_ranks,
+                retrieval_features=retrieval_ref.retrieval_features,
+                retrieval_only=True,
+            )
+            for retrieval_ref in retrieval_refs
+            if (item := items_by_id.get(retrieval_ref.document_id)) is not None
+        ]
+        ranked_items = [candidate for candidate in ranked_items if candidate.score > 0]
+
+        return {
+            **query_context,
+            "profile": profile,
+            "candidates": ranked_items,
             "ranked_items": ranked_items,
             "raw_candidates_count": raw_candidates_count,
         }
@@ -572,9 +625,7 @@ class SearchService:
         *values: str,
         extra_values: list[str] | None = None,
     ) -> list[str]:
-        semantic_texts = [value for value in values if value]
-        semantic_texts.extend(extra_values or [])
-        return list(dict.fromkeys(text for text in semantic_texts if text))
+        return []
 
     @staticmethod
     def _build_morphology_terms(*term_groups: list[str]) -> list[str]:
@@ -622,10 +673,12 @@ class SearchService:
             confidence="high",
         )
 
-        fuzzy_correction = resolve_query_fuzzy_correction(
-            normalized_query,
-            search_vocabulary,
-            protected_tokens=protected_terms,
+        fuzzy_correction = (
+            resolve_query_fuzzy_correction(
+                normalized_query,
+                search_vocabulary,
+                protected_tokens=protected_terms,
+            )
         )
         self._append_query_variant(
             variants_by_query,

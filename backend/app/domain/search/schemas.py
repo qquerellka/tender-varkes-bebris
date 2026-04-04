@@ -37,6 +37,8 @@ class CandidateItem(BaseModel):
     supplier_id: str = Field(default="", exclude=True)
     status: str = Field(default="", exclude=True)
     attributes: dict[str, str] = Field(default_factory=dict, exclude=True)
+    attributes_text: str = Field(default="", exclude=True)
+    attribute_value_count: int = Field(default=0, exclude=True)
     baseline_score: float = Field(default=0.0, exclude=True)
     retrieval_score: float = Field(default=0.0, exclude=True)
     retrieval_reasons: list[str] = Field(default_factory=list, exclude=True)

@@ -55,17 +55,17 @@ def _warmup_search_stack() -> None:
     try:
         with SessionLocal() as session:
             search_repository = SearchRepository(session)
-            index = search_repository._get_hybrid_index()
+            backend_status = search_repository.warmup_search_backend()
             elapsed_seconds = time.perf_counter() - search_started_at
-            app.state.search_documents_count = len(index.documents)
-            app.state.semantic_backend = index._semantic_backend
-            app.state.semantic_faiss_enabled = index._semantic_faiss_index is not None
+            app.state.search_documents_count = backend_status["documents_count"]
+            app.state.semantic_backend = backend_status["semantic_backend"]
+            app.state.semantic_faiss_enabled = backend_status["semantic_faiss_enabled"]
             app.state.search_warmup_duration_seconds = round(elapsed_seconds, 3)
             logger.info(
                 "Search warmup complete: semantic_backend=%s faiss_enabled=%s documents=%s duration_seconds=%.3f",
-                index._semantic_backend,
-                index._semantic_faiss_index is not None,
-                len(index.documents),
+                backend_status["semantic_backend"],
+                backend_status["semantic_faiss_enabled"],
+                backend_status["documents_count"],
                 elapsed_seconds,
             )
             app.state.search_warmup = "ready"

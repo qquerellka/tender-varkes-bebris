@@ -6,7 +6,7 @@ import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable
+from typing import AbstractSet, Any, Iterable
 
 import numpy as np
 
@@ -126,10 +126,20 @@ class _IndexedDocument:
     field_lemma_terms: dict[str, list[str]] | None
     field_lemma_sets: dict[str, frozenset[str]]
     analysis_by_field: dict[str, SearchTextAnalysis] | None
-    combined_analysis: SearchTextAnalysis
+    combined_analysis: "_RuntimeCombinedAnalysis | SearchTextAnalysis"
     title_trigrams: frozenset[str]
     text_trigrams: frozenset[str]
     fuzzy_variants: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class _RuntimeCombinedAnalysis:
+    all_terms: frozenset[str]
+    token_set: frozenset[str]
+    brand_terms: frozenset[str]
+    model_terms: frozenset[str]
+    code_terms: frozenset[str]
+    size_terms: frozenset[str]
 
 
 class HybridSearchIndex:
@@ -170,6 +180,9 @@ class HybridSearchIndex:
             document_id: position
             for position, document_id in enumerate(self.document_ids)
         }
+        self._all_positions = frozenset(range(len(indexed_documents)))
+        self._positions_by_category_id = self._build_position_lookup("category_id")
+        self._positions_by_supplier_id = self._build_position_lookup("supplier_id")
 
         (
             self._bm25_postings,
@@ -184,22 +197,13 @@ class HybridSearchIndex:
             self._lemma_bm25_idf,
         ) = self._build_fielded_bm25_index(use_lemmas=True, progress=progress)
 
-        self._semantic_enabled = (
-            enable_semantic
-            and settings.search_semantic_backend.strip().lower() != SEMANTIC_BACKEND_DISABLED
-        )
-        self._semantic_backend = (
-            SEMANTIC_BACKEND_FALLBACK
-            if self._semantic_enabled
-            else SEMANTIC_BACKEND_DISABLED
-        )
+        self._semantic_enabled = False
+        self._semantic_backend = SEMANTIC_BACKEND_DISABLED
         self._semantic_faiss_index = None
         self._semantic_word_vectorizer: Any | None = None
         self._semantic_char_vectorizer: Any | None = None
         self._semantic_svd: Any | None = None
         self._semantic_matrix = np.zeros((len(indexed_documents), 0), dtype=float)
-        if self._semantic_enabled:
-            self._build_semantic_index()
         self._release_build_only_state()
 
         if progress:
@@ -210,6 +214,15 @@ class HybridSearchIndex:
                 f"elapsed={_format_progress_seconds(elapsed)}",
                 flush=True,
             )
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_semantic_faiss_index"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._disable_semantic_runtime_state()
 
     def search(
         self,
@@ -472,17 +485,34 @@ class HybridSearchIndex:
         supplier_id: str | None,
         allowed_document_ids: set[str] | None = None,
     ) -> set[int]:
-        positions: set[int] = set()
-        for position, document in enumerate(self.documents):
-            payload = document.payload
-            if allowed_document_ids is not None and payload.id not in allowed_document_ids:
-                continue
-            if category_id and payload.category_id != category_id:
-                continue
-            if supplier_id and payload.supplier_id != supplier_id:
-                continue
-            positions.add(position)
-        return positions
+        if allowed_document_ids is None:
+            positions: AbstractSet[int] = self._all_positions
+        else:
+            positions = {
+                self._position_by_id[document_id]
+                for document_id in allowed_document_ids
+                if document_id in self._position_by_id
+            }
+            if not positions:
+                return set()
+
+        if category_id:
+            category_positions = self._positions_by_category_id.get(category_id)
+            if not category_positions:
+                return set()
+            positions = positions & category_positions
+            if not positions:
+                return set()
+
+        if supplier_id:
+            supplier_positions = self._positions_by_supplier_id.get(supplier_id)
+            if not supplier_positions:
+                return set()
+            positions = positions & supplier_positions
+            if not positions:
+                return set()
+
+        return set(positions)
 
     def _build_fielded_bm25_index(
         self,
@@ -587,6 +617,17 @@ class HybridSearchIndex:
             flush=True,
         )
 
+    def _build_position_lookup(self, attribute_name: str) -> dict[str, frozenset[int]]:
+        positions_by_value: dict[str, set[int]] = defaultdict(set)
+        for position, document in enumerate(self.documents):
+            value = getattr(document.payload, attribute_name, "")
+            if value:
+                positions_by_value[str(value)].add(position)
+        return {
+            value: frozenset(positions)
+            for value, positions in positions_by_value.items()
+        }
+
     def _build_semantic_index(self) -> None:
         if not self.documents:
             return
@@ -617,6 +658,13 @@ class HybridSearchIndex:
             document.field_terms = None
             document.field_lemma_terms = None
             document.analysis_by_field = None
+            document.combined_analysis = _to_runtime_combined_analysis(document.combined_analysis)
+            document.payload.title = ""
+            document.payload.description = ""
+            document.payload.category_name = ""
+            document.payload.supplier_name = ""
+            document.payload.attributes = {}
+            document.payload.status = ""
 
     @staticmethod
     def _build_semantic_document_text(document: _IndexedDocument) -> str:
@@ -703,11 +751,20 @@ class HybridSearchIndex:
         self._semantic_matrix = _l2_normalize(dense)
         self._semantic_faiss_index = None
 
+    def _disable_semantic_runtime_state(self) -> None:
+        self._semantic_enabled = False
+        self._semantic_backend = SEMANTIC_BACKEND_DISABLED
+        self._semantic_faiss_index = None
+        self._semantic_word_vectorizer = None
+        self._semantic_char_vectorizer = None
+        self._semantic_svd = None
+        self._semantic_matrix = np.zeros((len(self.documents), 0), dtype=float)
+
     def _retrieve_bm25(
         self,
         *,
         tokens: list[str],
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
         use_lemmas: bool,
     ) -> list[_ChannelHit]:
@@ -753,7 +810,7 @@ class HybridSearchIndex:
         self,
         *,
         analysis: SearchTextAnalysis,
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if not analysis.normalized_text:
@@ -762,16 +819,16 @@ class HybridSearchIndex:
         scores: dict[int, float] = {}
         features_by_position: dict[int, dict[str, float]] = {}
 
-        query_term_set = set(analysis.text_terms)
-        query_lemma_set = set(analysis.lemma_terms)
-        category_hint_set = set(analysis.category_hints)
-        attribute_term_set = set(analysis.attribute_terms)
-        brand_term_set = set(analysis.brand_terms)
-        model_term_set = set(analysis.model_terms)
-        code_term_set = set(analysis.code_terms)
-        size_term_set = set(analysis.size_terms)
+        query_term_set = analysis.text_term_set
+        query_lemma_set = analysis.lemma_term_set
+        category_hint_set = analysis.category_hint_set
+        attribute_term_set = analysis.attribute_term_set
+        brand_term_set = analysis.brand_term_set
+        model_term_set = analysis.model_term_set
+        code_term_set = analysis.code_term_set
+        size_term_set = analysis.size_term_set
         quantity_constraints = analysis.quantity_constraints
-        strict_terms = set(analysis.strict_terms)
+        strict_terms = analysis.strict_terms
 
         for position in allowed_positions:
             document = self.documents[position]
@@ -829,20 +886,20 @@ class HybridSearchIndex:
                     score += min(category_matches * 0.17, 0.51)
                     feature_map["category_match_flag"] = 1.0
 
-            brand_matches = len(brand_term_set & set(document.combined_analysis.brand_terms))
+            brand_matches = len(brand_term_set & document.combined_analysis.brand_terms)
             if brand_matches:
                 score += 0.36 + min(brand_matches * 0.12, 0.24)
                 feature_map["brand_match_flag"] = 1.0
 
-            model_matches = len(model_term_set & set(document.combined_analysis.model_terms))
+            model_matches = len(model_term_set & document.combined_analysis.model_terms)
             if model_matches:
                 score += 0.42 + min(model_matches * 0.12, 0.3)
 
-            code_matches = len(code_term_set & set(document.combined_analysis.code_terms))
+            code_matches = len(code_term_set & document.combined_analysis.code_terms)
             if code_matches:
                 score += 0.35 + min(code_matches * 0.1, 0.2)
 
-            size_matches = len(size_term_set & set(document.combined_analysis.size_terms))
+            size_matches = len(size_term_set & document.combined_analysis.size_terms)
             if size_matches:
                 score += 0.28 + min(size_matches * 0.12, 0.24)
 
@@ -855,7 +912,7 @@ class HybridSearchIndex:
                     score += min(numeric_matches * 0.28, 0.84)
 
             strict_match_count = 0
-            combined_terms = set(document.combined_analysis.all_terms)
+            combined_terms = document.combined_analysis.all_terms
             for term in strict_terms:
                 if term in combined_terms:
                     strict_match_count += 1
@@ -887,7 +944,7 @@ class HybridSearchIndex:
         self,
         *,
         analysis: SearchTextAnalysis,
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if (
@@ -899,8 +956,8 @@ class HybridSearchIndex:
 
         scores: dict[int, float] = {}
         features_by_position: dict[int, dict[str, float]] = {}
-        attribute_term_set = set(analysis.attribute_terms)
-        category_hint_set = set(analysis.category_hints)
+        attribute_term_set = analysis.attribute_term_set
+        category_hint_set = analysis.category_hint_set
 
         for position in allowed_positions:
             document = self.documents[position]
@@ -958,7 +1015,7 @@ class HybridSearchIndex:
         self,
         *,
         queries: list[str],
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if not queries:
@@ -1018,7 +1075,7 @@ class HybridSearchIndex:
         self,
         *,
         queries: list[str],
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if not queries or self._semantic_matrix.size == 0:
@@ -1239,8 +1296,8 @@ def _count_matching_constraints(
         return 0
 
     matches = 0
-    document_terms = set(document.combined_analysis.all_terms)
-    document_tokens = set(document.combined_analysis.token_sequence)
+    document_terms = document.combined_analysis.all_terms
+    document_tokens = document.combined_analysis.token_set
     for constraint in constraints:
         if constraint.normalized in document_terms:
             matches += 1
@@ -1248,6 +1305,21 @@ def _count_matching_constraints(
         if constraint.value in document_tokens and constraint.unit in document_terms:
             matches += 1
     return matches
+
+
+def _to_runtime_combined_analysis(
+    analysis: SearchTextAnalysis | _RuntimeCombinedAnalysis,
+) -> _RuntimeCombinedAnalysis:
+    if isinstance(analysis, _RuntimeCombinedAnalysis):
+        return analysis
+    return _RuntimeCombinedAnalysis(
+        all_terms=analysis.all_term_set,
+        token_set=analysis.token_set,
+        brand_terms=analysis.brand_term_set,
+        model_terms=analysis.model_term_set,
+        code_terms=analysis.code_term_set,
+        size_terms=analysis.size_term_set,
+    )
 
 
 def _l2_normalize(matrix: np.ndarray) -> np.ndarray:

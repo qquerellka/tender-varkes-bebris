@@ -1,19 +1,29 @@
 # Tender Portal MVP
 
-MVP-каталог СТЕ для сценариев закупки, поиска и ML reranking.
+Каталог СТЕ для сценариев закупки, поиска и ML reranking.
 
 В репозитории есть:
 - `frontend` на `React + Vite`
 - `backend` на `FastAPI + PostgreSQL + SQLAlchemy + Alembic`
 - `ML` со сборкой датасета из реальных CSV портала и обучением CatBoost reranker
 
-## Главное изменение
+## Что важно сейчас
 
-Проект теперь работает в `orig-only` режиме:
-- synthetic dataset больше не используется
-- bootstrap работает только через `portal_csv`, без fallback на demo
-- основной источник ML-данных: `ML/data/orig`
-- ML-признаки не используют semantic feature columns
+Проект работает в `orig-only` режиме:
+- synthetic dataset больше не используется для bootstrap и runtime
+- bootstrap идёт только через `portal_csv`
+- основной runtime-путь поиска теперь `DB-first`, а не полный in-memory индекс
+- semantic retrieval полностью отключён
+
+Текущий локальный профиль по умолчанию:
+
+```env
+RANKING_MODE=retrieval_only
+RANKING_PROVIDER=noop
+SEARCH_RETRIEVAL_BACKEND=postgres
+SEARCH_SEMANTIC_BACKEND=disabled
+SEARCH_SEMANTIC_USE_FAISS=false
+```
 
 ## Структура
 
@@ -36,46 +46,63 @@ docker compose up --build
 - backend: `http://localhost:8000`
 - swagger: `http://localhost:8000/docs`
 
-По умолчанию backend ожидает real CSV в:
+По умолчанию backend ожидает реальные CSV в:
 - `ML/data/orig/СТЕ_20260403/СТЕ_20260403.csv`
 - `ML/data/orig/Контракты_20260403/Контракты_20260403.csv`
 
+## Как сейчас работает поиск
+
+1. Bootstrap загружает каталог из portal CSV в PostgreSQL.
+2. Startup warmup больше не строит полный глобальный `HybridSearchIndex`, если включён `SEARCH_RETRIEVAL_BACKEND=postgres`.
+3. Запрос нормализуется, после чего search service строит варианты:
+   - оригинальный запрос
+   - corrections из `spell_corrections`
+   - keyboard layout correction
+   - fuzzy correction и fuzzy term expansion через лёгкий spell vocabulary, собранный из БД
+4. Candidate generation идёт в PostgreSQL:
+   - основной канал: full-text search по `title + description + attributes_json`
+   - дополнительные lexical-каналы: morphology и synonym terms
+   - результаты SQL-каналов сливаются через RRF
+   - `pg_trgm` запускается только как fallback, если FTS дал слишком мало уникальных кандидатов
+   - trigram fallback сейчас работает по `title`, чтобы не разгонять latency и RAM на широком `attributes_json` проходе
+5. Дальше есть два режима:
+   - `retrieval_only` и не-`strict_match`: результаты возвращаются сразу из SQL RRF-слияния, без per-query mini-индекса
+   - `strict_match` или не-`retrieval_only`: PostgreSQL сначала даёт shortlist, а затем маленький in-memory `HybridSearchIndex` строится только на shortlist, а не на всём корпусе
+6. Runtime-кандидаты больше не тащат полный payload:
+   - retrieval оперирует `id` и compact features
+   - payload подгружается поздно, только для итоговых top-N
+   - snapshot хранит `attributes_text` и `attribute_value_count`, а не полный `attributes` dict
+
 ## Текущий runtime-профиль
 
-По умолчанию проект сейчас настроен под быстрый retrieval-first запуск на portal CSV:
-- bootstrap идёт через `portal_csv`, без synthetic fallback
-- основной режим ранжирования для локальной отладки: `RANKING_MODE=retrieval_only`
-- semantic retrieval можно отключить через `SEARCH_SEMANTIC_BACKEND=disabled`
-- search index сохраняется на диск и переиспользуется между рестартами контейнера
-- search warmup строит документы для индекса потоково из БД, а не через полный список ORM-объектов
-- после построения retrieval index backend освобождает build-only токены и вспомогательные структуры, чтобы снизить steady-state RAM
-
 В `.env.example` выставлены dev-safe лимиты импорта:
-- `PORTAL_IMPORT_STE_LIMIT=10000`
-- `PORTAL_IMPORT_CONTRACT_LIMIT=10000`
 
-Это нужно, чтобы первый импорт и warmup были предсказуемыми на локальной машине. Для полного каталога увеличь лимиты или поставь `0`.
-
-Если во время `docker compose up --build` всё ещё не хватает памяти, начни с ограниченного импорта:
-
-```bash
-PORTAL_IMPORT_STE_LIMIT=100000
-PORTAL_IMPORT_CONTRACT_LIMIT=100000
-SEARCH_SEMANTIC_BACKEND=disabled
-docker compose up --build
+```env
+PORTAL_IMPORT_STE_LIMIT=10000
+PORTAL_IMPORT_CONTRACT_LIMIT=10000
+PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT=120
 ```
 
-После успешного первого старта можно постепенно повышать лимиты и использовать сохранённый search index cache.
+Это нужно, чтобы первый импорт и локальный старт были предсказуемыми по времени и памяти. Для полного каталога увеличь лимиты или поставь `0`.
 
-## Что изменилось в поиске
+Семантика выключена полностью:
 
-- retrieval переписан под новый каталог из `ML/data/orig`
-- тяжёлые retrieval-каналы работают по shortlist кандидатов, а не по всему каталогу
-- typo/fuzzy correction больше не сканирует весь словарь на каждый запрос, а использует spell vocabulary по полезным catalog-токенам
-- query correction теперь формирует набор variants с confidence: high-confidence вариант может стать primary query, а medium-confidence вариант ищется параллельно с original
-- typo pipeline защищает brand/model/code/size токены и не пытается переисправлять `hp`, `12a`, `a4`, `usb`, `ssd` и похожие артикулы
-- search warmup пишет тайминг и может грузить уже сохранённый индекс вместо полного rebuild
-- backend использует более широкий DB connection pool для снижения `QueuePool timeout` под параллельными запросами
+```env
+SEARCH_SEMANTIC_BACKEND=disabled
+SEARCH_SEMANTIC_USE_FAISS=false
+```
+
+`SEARCH_INDEX_CACHE_PATH` остаётся в конфиге только для опционального `memory` backend. В дефолтном `postgres`-режиме startup не зависит от persisted hybrid index.
+
+## Когда нужен memory backend
+
+Старый `HybridSearchIndex` всё ещё доступен как опциональный режим:
+
+```env
+SEARCH_RETRIEVAL_BACKEND=memory
+```
+
+Но это уже не default-путь. Он потребляет заметно больше RAM, дольше стартует и нужен только если ты сознательно хочешь вернуть полный in-memory retrieval поверх всего корпуса.
 
 ## ML workflow
 
@@ -96,5 +123,6 @@ docker compose restart backend
 ## Что важно знать
 
 - `BOOTSTRAP_DATASET` по умолчанию теперь `portal_csv`
-- `ML/models/catboost_ranker_v1` остается директорией артефактов для backend
 - offline ML pipeline использует только `orig`-данные и не добавляет semantic feature columns
+- быстрый локальный режим сейчас ориентирован на `postgres + retrieval_only`
+- если нужна диагностика search stack, смотри `GET /api/v1/debug/search-stack`
