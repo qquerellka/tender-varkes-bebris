@@ -312,6 +312,7 @@ class SearchService:
             "spellcheck": 0,
             "keyboard_layout": 1,
             "fuzzy_spellcheck": 2,
+            "fuzzy_spellcheck_fallback": 3,
             "original": 99,
         }
         return priorities.get(source, 50)
@@ -462,6 +463,7 @@ class SearchService:
             "resolved_query": resolved_query,
             "normalized_query": normalized_query,
             "effective_query": effective_query,
+            "active_queries": active_queries,
             "corrected_query": resolved_query.corrected_query,
             "correction_type": resolved_query.correction_type,
             "correction_confidence": resolved_query.correction_confidence,
@@ -496,6 +498,7 @@ class SearchService:
 
         hits = self.search_repository.search_candidates(
             query_terms=query_context["search_terms"],
+            query_text_variants=query_context["active_queries"],
             morphology_query_terms=query_context["morphology_query_terms"],
             fuzzy_query_terms=query_context["fuzzy_search_terms"],
             synonym_query_terms=query_context["synonym_query_terms"],
@@ -553,6 +556,7 @@ class SearchService:
     ) -> dict:
         retrieval_refs = self.search_repository.search_candidate_refs(
             query_terms=query_context["search_terms"],
+            query_text_variants=query_context["active_queries"],
             morphology_query_terms=query_context["morphology_query_terms"],
             fuzzy_query_terms=query_context["fuzzy_search_terms"],
             synonym_query_terms=query_context["synonym_query_terms"],
@@ -686,6 +690,27 @@ class SearchService:
             source="fuzzy_spellcheck",
             confidence=fuzzy_correction.confidence if fuzzy_correction else "none",
         )
+        if fuzzy_correction is None:
+            fallback_fuzzy_variants = expand_fuzzy_term_variants(
+                [normalized_query],
+                search_vocabulary,
+                limit_per_term=1,
+                protected_tokens=protected_terms,
+            )
+            fallback_query = next(
+                (
+                    candidate
+                    for candidate in fallback_fuzzy_variants
+                    if candidate and candidate != normalized_query
+                ),
+                None,
+            )
+            self._append_query_variant(
+                variants_by_query,
+                query=fallback_query,
+                source="fuzzy_spellcheck_fallback",
+                confidence="medium",
+            )
 
         variants = list(variants_by_query.values())
         variants.sort(

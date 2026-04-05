@@ -4,8 +4,14 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.db.base import Base
-from app.db.models import CategoryModel, STEItemModel, SupplierModel, SynonymModel
-from app.db.portal_csv_loader import import_portal_csv_dataset
+from app.db.models import (
+    CategoryModel,
+    STEItemModel,
+    SupplierModel,
+    SpellCorrectionModel,
+    SynonymModel,
+)
+from app.db.portal_csv_loader import ensure_seed_spell_and_synonyms, import_portal_csv_dataset
 from app.db.session import SessionLocal, engine
 
 
@@ -38,6 +44,9 @@ def _bootstrap_portal_csv_data() -> bool:
             existing_synonyms = int(
                 session.execute(select(func.count(SynonymModel.id))).scalar_one() or 0
             )
+            existing_spell_corrections = int(
+                session.execute(select(func.count(SpellCorrectionModel.id))).scalar_one() or 0
+            )
             if (
                 existing_items > 0
                 and existing_categories > 0
@@ -53,11 +62,13 @@ def _bootstrap_portal_csv_data() -> bool:
                     )
                     truncate_import = True
                 else:
+                    ensure_seed_spell_and_synonyms(session)
                     print(
                         "[bootstrap] Portal CSV import skipped: "
                         "catalog already loaded "
                         f"(items={existing_items}, categories={existing_categories}, "
-                        f"suppliers={existing_suppliers}, synonyms={existing_synonyms}).",
+                        f"suppliers={existing_suppliers}, synonyms={existing_synonyms}, "
+                        f"spell_corrections={existing_spell_corrections}).",
                         flush=True,
                     )
                     return True
@@ -68,6 +79,7 @@ def _bootstrap_portal_csv_data() -> bool:
                     existing_categories,
                     existing_suppliers,
                     existing_synonyms,
+                    existing_spell_corrections,
                 )
             ):
                 print(

@@ -169,6 +169,7 @@ class SearchRepository:
     def search_candidates(
         self,
         query_terms: list[str],
+        query_text_variants: list[str] | None = None,
         morphology_query_terms: list[str] | None = None,
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
@@ -182,6 +183,7 @@ class SearchRepository:
     ) -> list[SearchCandidateHit]:
         retrieval_refs = self.search_candidate_refs(
             query_terms=query_terms,
+            query_text_variants=query_text_variants,
             morphology_query_terms=morphology_query_terms,
             fuzzy_query_terms=fuzzy_query_terms,
             synonym_query_terms=synonym_query_terms,
@@ -220,6 +222,7 @@ class SearchRepository:
     def search_candidate_refs(
         self,
         query_terms: list[str],
+        query_text_variants: list[str] | None = None,
         morphology_query_terms: list[str] | None = None,
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
@@ -234,6 +237,7 @@ class SearchRepository:
         if self._get_retrieval_backend() == POSTGRES_RETRIEVAL_BACKEND:
             return self._search_candidate_refs_postgres(
                 query_terms=query_terms,
+                query_text_variants=query_text_variants,
                 morphology_query_terms=morphology_query_terms,
                 fuzzy_query_terms=fuzzy_query_terms,
                 synonym_query_terms=synonym_query_terms,
@@ -248,6 +252,7 @@ class SearchRepository:
 
         return self._search_candidate_refs_memory(
             query_terms=query_terms,
+            query_text_variants=query_text_variants,
             morphology_query_terms=morphology_query_terms,
             fuzzy_query_terms=fuzzy_query_terms,
             synonym_query_terms=synonym_query_terms,
@@ -263,6 +268,7 @@ class SearchRepository:
     def _search_candidate_refs_memory(
         self,
         query_terms: list[str],
+        query_text_variants: list[str] | None = None,
         morphology_query_terms: list[str] | None = None,
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
@@ -330,6 +336,7 @@ class SearchRepository:
     def _search_candidate_refs_postgres(
         self,
         query_terms: list[str],
+        query_text_variants: list[str] | None = None,
         morphology_query_terms: list[str] | None = None,
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
@@ -364,6 +371,7 @@ class SearchRepository:
         )
         channel_results = self._build_postgres_channel_results(
             lexical_terms=lexical_terms,
+            query_text_variants=query_text_variants or [],
             morphology_terms=morphology_terms,
             synonym_terms=synonym_terms,
             fuzzy_terms=fuzzy_terms,
@@ -750,6 +758,7 @@ class SearchRepository:
         self,
         *,
         lexical_terms: list[str],
+        query_text_variants: list[str],
         morphology_terms: list[str],
         synonym_terms: list[str],
         fuzzy_terms: list[str],
@@ -771,34 +780,44 @@ class SearchRepository:
             return {"bm25": allowed_rows}
 
         primary_query = structured_query.normalized_text if structured_query else ""
+        lexical_query_variants = self._deduplicate_non_empty(
+            [
+                primary_query,
+                *query_text_variants,
+            ]
+        )[:4]
         lexical_query = normalize_query(" ".join(lexical_terms))
         morphology_query = normalize_query(" ".join(morphology_terms))
         synonym_query = normalize_query(" ".join(synonym_terms))
         trigram_queries = self._deduplicate_non_empty(
             [
                 primary_query,
+                *query_text_variants,
                 *fuzzy_terms,
             ]
-        )[:4]
+        )[:6]
 
         channel_results: dict[str, list[dict[str, Any]]] = {}
-        bm25_query = next(
-            (
-                candidate
-                for candidate in [primary_query, lexical_query]
-                if candidate
-            ),
-            "",
-        )
-        if bm25_query:
-            channel_results["bm25"] = self._run_postgres_fts_query(
-                query_text=bm25_query,
-                category_id=category_id,
-                supplier_id=supplier_id,
-                limit=limit,
-            )
+        if lexical_query and lexical_query not in lexical_query_variants:
+            lexical_query_variants.append(lexical_query)
+        if lexical_query_variants:
+            bm25_rows: list[dict[str, Any]] = []
+            for query_text in lexical_query_variants:
+                rows = self._run_postgres_fts_query(
+                    query_text=query_text,
+                    category_id=category_id,
+                    supplier_id=supplier_id,
+                    limit=limit,
+                )
+                if rows:
+                    bm25_rows.extend(rows)
+            if bm25_rows:
+                channel_results["bm25"] = self._merge_ranked_rows_by_document(
+                    bm25_rows,
+                    limit=limit,
+                )
 
-        if morphology_query and morphology_query != bm25_query:
+        if morphology_query and morphology_query not in {*lexical_query_variants}:
             channel_results["morphology"] = self._run_postgres_fts_query(
                 query_text=morphology_query,
                 category_id=category_id,
@@ -806,7 +825,7 @@ class SearchRepository:
                 limit=limit,
             )
 
-        if synonym_query and synonym_query not in {bm25_query, morphology_query}:
+        if synonym_query and synonym_query not in {*lexical_query_variants, morphology_query}:
             channel_results["synonym_bm25"] = self._run_postgres_fts_query(
                 query_text=synonym_query,
                 category_id=category_id,

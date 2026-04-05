@@ -21,6 +21,7 @@ from app.db.models import (
     OrganizationModel,
     PurchaseHistoryModel,
     SearchEventModel,
+    SearchImpressionModel,
     SearchSessionModel,
     STEItemModel,
     SpellCorrectionModel,
@@ -56,10 +57,12 @@ DEFAULT_SYNONYMS = (
 )
 
 DEFAULT_SPELL_CORRECTIONS = (
+    ("абобус", "автобус"),
     ("абтобус", "автобус"),
     ("серер", "сервер"),
     ("ноутубк", "ноутбук"),
     ("картриджж", "картридж"),
+    ("сопоги", "сапоги"),
     ("ватрущка", "ватрушка"),
     ("тубинг", "тюбинг"),
     ("бумга", "бумага"),
@@ -184,6 +187,7 @@ def _flush_catalog_buffers(
 def _truncate_tables(session: Session) -> None:
     for model in (
         SearchEventModel,
+        SearchImpressionModel,
         SearchSessionModel,
         PurchaseHistoryModel,
         UserSearchProfileModel,
@@ -299,6 +303,16 @@ def _seed_spell_and_synonyms(session: Session) -> dict[str, int]:
         for wrong_term, correct_term in DEFAULT_SPELL_CORRECTIONS
     ]
 
+    session.execute(
+        delete(SynonymModel).where(
+            SynonymModel.id.in_([row["id"] for row in synonym_rows])
+        )
+    )
+    session.execute(
+        delete(SpellCorrectionModel).where(
+            SpellCorrectionModel.id.in_([row["id"] for row in correction_rows])
+        )
+    )
     session.execute(insert(SynonymModel), synonym_rows)
     session.execute(insert(SpellCorrectionModel), correction_rows)
     session.commit()
@@ -306,6 +320,10 @@ def _seed_spell_and_synonyms(session: Session) -> dict[str, int]:
         "synonyms": len(synonym_rows),
         "spell_corrections": len(correction_rows),
     }
+
+
+def ensure_seed_spell_and_synonyms(session: Session) -> dict[str, int]:
+    return _seed_spell_and_synonyms(session)
 
 
 def import_portal_csv_dataset(
