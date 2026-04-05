@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import SearchEventModel, SearchImpressionModel, SearchSessionModel, STEItemModel
@@ -179,4 +179,28 @@ class EventRepository:
             "open_after_click_rate": open_after_click_rate,
             "purchase_after_intent_rate": purchase_after_intent_rate,
             "event_counts": event_counts,
+        }
+
+    def clear_user_activity(
+        self,
+        *,
+        user_id: str,
+        organization_id: str,
+    ) -> dict[str, int]:
+        deleted_events = self.session.execute(
+            delete(SearchEventModel).where(
+                SearchEventModel.user_id == user_id,
+                SearchEventModel.organization_id == organization_id,
+            )
+        )
+        deleted_impressions = self.session.execute(
+            delete(SearchImpressionModel).where(
+                SearchImpressionModel.user_id == user_id,
+                SearchImpressionModel.organization_id == organization_id,
+            )
+        )
+        self.session.commit()
+        return {
+            "events_deleted": deleted_events.rowcount or 0,
+            "impressions_deleted": deleted_impressions.rowcount or 0,
         }

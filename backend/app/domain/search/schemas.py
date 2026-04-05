@@ -18,6 +18,8 @@ class SearchFilters(BaseModel):
     category_id: str | None = None
     supplier_id: str | None = None
     strict_match: bool = False
+    domestic_only: bool = False
+    origin_value: str | None = None
 
 
 class SearchRequest(BaseModel):
@@ -104,6 +106,12 @@ class SearchSessionRead(BaseModel):
 
 class SearchHistoryResponse(BaseModel):
     items: list[SearchSessionRead] = Field(default_factory=list)
+
+
+class SearchHistoryClearResponse(BaseModel):
+    events_deleted: int = 0
+    impressions_deleted: int = 0
+    sessions_deleted: int = 0
 
 
 class SearchActivityItemRead(BaseModel):

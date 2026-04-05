@@ -14,6 +14,12 @@ class SupplierRead(BaseModel):
     name: str
 
 
+class ProductionOriginOptionRead(BaseModel):
+    value: str
+    label: str
+    item_count: int
+
+
 class CatalogSummaryCategoryRead(BaseModel):
     id: str
     name: str

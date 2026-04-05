@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,6 +20,7 @@ from app.db.models import (
     SupplierModel,
     SynonymModel,
 )
+from app.domain.catalog.origin_filters import matches_origin_filters
 from app.domain.search.normalizer import (
     SpellVocabularyIndex,
     build_spell_vocabulary_index,
@@ -63,6 +64,7 @@ class SearchItemSnapshot:
     category_name: str
     supplier_id: str
     supplier_name: str
+    attributes: dict[str, str] = field(default_factory=dict)
     attributes_text: str = ""
     attribute_value_count: int = 0
     status: str = "active"
@@ -166,6 +168,21 @@ class SearchRepository:
         )
         return list(self.session.scalars(stmt))
 
+    def clear_sessions(
+        self,
+        *,
+        user_id: str,
+        organization_id: str,
+    ) -> int:
+        deleted = self.session.execute(
+            delete(SearchSessionModel).where(
+                SearchSessionModel.user_id == user_id,
+                SearchSessionModel.organization_id == organization_id,
+            )
+        )
+        self.session.commit()
+        return deleted.rowcount or 0
+
     def search_candidates(
         self,
         query_terms: list[str],
@@ -178,6 +195,8 @@ class SearchRepository:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        domestic_only: bool = False,
+        origin_value: str | None = None,
         allowed_document_ids: set[str] | None = None,
         limit: int = 80,
     ) -> list[SearchCandidateHit]:
@@ -206,6 +225,12 @@ class SearchRepository:
         for result in retrieval_refs:
             item = items_by_id.get(result.document_id)
             if item is None:
+                continue
+            if not matches_origin_filters(
+                item.attributes,
+                domestic_only=domestic_only,
+                origin_value=origin_value,
+            ):
                 continue
             hits.append(
                 SearchCandidateHit(
@@ -1236,6 +1261,7 @@ class SearchRepository:
             category_name=str(row["category_name"] or ""),
             supplier_id=str(row["supplier_id"] or ""),
             supplier_name=str(row["supplier_name"] or ""),
+            attributes=attributes,
             attributes_text=" ".join(attribute_values),
             attribute_value_count=len(attributes),
             status=str(row["status"] or "active"),

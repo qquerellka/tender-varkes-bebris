@@ -6,6 +6,7 @@ from app.domain.catalog.schemas import (
     CatalogFeedRead,
     CatalogSummaryRead,
     CategoryRead,
+    ProductionOriginOptionRead,
     RelatedSTEItemRead,
     STEItemRead,
     SupplierRead,
@@ -32,6 +33,14 @@ def list_suppliers(
     return catalog_service.list_suppliers()
 
 
+@router.get("/production-origins", response_model=list[ProductionOriginOptionRead])
+def list_production_origins(
+    session: Session = Depends(get_session_dependency),
+) -> list[ProductionOriginOptionRead]:
+    catalog_service = get_catalog_service(session)
+    return catalog_service.list_production_origins()
+
+
 @router.get("/summary", response_model=CatalogSummaryRead)
 def get_catalog_summary(
     session: Session = Depends(get_session_dependency),
@@ -47,6 +56,8 @@ def get_catalog_feed(
     offset: int = 0,
     category_id: str | None = None,
     supplier_id: str | None = None,
+    domestic_only: bool = False,
+    origin_value: str | None = None,
     session: Session = Depends(get_session_dependency),
     actor: CurrentActor = Depends(get_current_actor),
 ) -> CatalogFeedRead:
@@ -58,6 +69,8 @@ def get_catalog_feed(
         offset=offset,
         category_id=category_id,
         supplier_id=supplier_id,
+        domestic_only=domestic_only,
+        origin_value=origin_value,
     )
 
 

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from app.core.config import settings
+from app.domain.catalog.origin_filters import matches_origin_filters
 from app.domain.catalog.service import CatalogService
 from app.domain.events.schemas import SearchEventRead
 from app.domain.events.service import EventService
@@ -28,6 +29,7 @@ from app.domain.search.schemas import (
     SearchQueryVariantRead,
     SearchDebugStructuredQueryRead,
     SearchHistoryResponse,
+    SearchHistoryClearResponse,
     SearchMeta,
     SearchRequest,
     SearchResponse,
@@ -507,6 +509,8 @@ class SearchService:
             strict_match=payload.filters.strict_match,
             category_id=payload.filters.category_id,
             supplier_id=payload.filters.supplier_id,
+            domestic_only=payload.filters.domestic_only,
+            origin_value=payload.filters.origin_value,
         )
         raw_candidates_count = len(hits)
         candidates = [
@@ -586,6 +590,11 @@ class SearchService:
             )
             for retrieval_ref in retrieval_refs
             if (item := items_by_id.get(retrieval_ref.document_id)) is not None
+            and matches_origin_filters(
+                item.attributes,
+                domestic_only=payload.filters.domestic_only,
+                origin_value=payload.filters.origin_value,
+            )
         ]
         ranked_items = [candidate for candidate in ranked_items if candidate.score > 0]
 
@@ -996,6 +1005,27 @@ class SearchService:
                 )
                 for item in sessions
             ]
+        )
+
+    def clear_history(
+        self,
+        actor: CurrentActor,
+    ) -> SearchHistoryClearResponse:
+        if not actor.personalization_enabled:
+            return SearchHistoryClearResponse()
+
+        deleted_activity = self.event_service.repository.clear_user_activity(
+            user_id=actor.user_id,
+            organization_id=actor.organization_id,
+        )
+        deleted_sessions = self.search_repository.clear_sessions(
+            user_id=actor.user_id,
+            organization_id=actor.organization_id,
+        )
+        return SearchHistoryClearResponse(
+            events_deleted=deleted_activity["events_deleted"],
+            impressions_deleted=deleted_activity["impressions_deleted"],
+            sessions_deleted=deleted_sessions,
         )
 
     def debug_search_ranking(

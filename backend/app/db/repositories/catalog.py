@@ -14,6 +14,7 @@ from app.db.models import (
     STEItemModel,
     SupplierModel,
 )
+from app.domain.catalog.origin_filters import extract_origin_values, matches_origin_filters
 
 TOKEN_RE = re.compile(r"[a-zA-Zа-яА-Я0-9]+")
 SUPPLIER_STOPWORDS = {"ооо", "ао", "оао", "зао", "ип", "fgup", "фгуп", "group", "trade"}
@@ -90,6 +91,12 @@ class CatalogFeedSnapshot:
     offset: int
 
 
+@dataclass
+class ProductionOriginOptionSnapshot:
+    value: str
+    item_count: int
+
+
 def _extract_tokens(value: str) -> set[str]:
     return {
         token.lower()
@@ -124,6 +131,8 @@ class CatalogRepository:
         offset: int = 0,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        domestic_only: bool = False,
+        origin_value: str | None = None,
     ) -> CatalogFeedSnapshot:
         candidate_ids: list[str] = []
         reason_by_id: dict[str, str] = {}
@@ -187,6 +196,16 @@ class CatalogRepository:
             stmt = stmt.where(STEItemModel.supplier_id == supplier_id)
 
         items = list(self.session.scalars(stmt))
+        if domestic_only or origin_value:
+            items = [
+                item
+                for item in items
+                if matches_origin_filters(
+                    item.attributes_json,
+                    domestic_only=domestic_only,
+                    origin_value=origin_value,
+                )
+            ]
         order = {item_id: index for index, item_id in enumerate(candidate_ids)}
         items.sort(key=lambda item: order.get(item.id, len(order)))
 
@@ -200,6 +219,19 @@ class CatalogRepository:
             for item in paged_items
         ]
         return CatalogFeedSnapshot(items=snapshots, total=total, limit=limit, offset=offset)
+
+    def list_production_origins(self, limit: int = 120) -> list[ProductionOriginOptionSnapshot]:
+        counter: dict[str, int] = {}
+        stmt = select(STEItemModel.attributes_json)
+        for attributes in self.session.scalars(stmt):
+            for value in extract_origin_values(attributes):
+                counter[value] = counter.get(value, 0) + 1
+
+        ranked = sorted(counter.items(), key=lambda item: (-item[1], item[0].lower()))
+        return [
+            ProductionOriginOptionSnapshot(value=value, item_count=item_count)
+            for value, item_count in ranked[:limit]
+        ]
 
     def get_ste_by_id(self, ste_id: str) -> STEItemModel | None:
         stmt = (

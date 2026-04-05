@@ -8,6 +8,7 @@ from app.domain.catalog.schemas import (
     CatalogSummaryCategoryRead,
     CatalogSummaryRead,
     CategoryRead,
+    ProductionOriginOptionRead,
     PurchaseHistoryItemRead,
     RelatedSTEItemRead,
     SupplierInsightsRead,
@@ -25,6 +26,7 @@ class CatalogService:
     _cache_lock = threading.Lock()
     _categories_cache: tuple[CategoryRead, ...] | None = None
     _suppliers_cache: tuple[SupplierRead, ...] | None = None
+    _production_origins_cache: tuple[ProductionOriginOptionRead, ...] | None = None
 
     def __init__(
         self,
@@ -69,6 +71,25 @@ class CatalogService:
                     for item in self.repository.list_suppliers()
                 )
                 self.__class__._suppliers_cache = cache
+        return list(cache)
+
+    def list_production_origins(self) -> list[ProductionOriginOptionRead]:
+        cache = self.__class__._production_origins_cache
+        if cache is not None:
+            return list(cache)
+
+        with self.__class__._cache_lock:
+            cache = self.__class__._production_origins_cache
+            if cache is None:
+                cache = tuple(
+                    ProductionOriginOptionRead(
+                        value=item.value,
+                        label=item.value,
+                        item_count=item.item_count,
+                    )
+                    for item in self.repository.list_production_origins()
+                )
+                self.__class__._production_origins_cache = cache
         return list(cache)
 
     def get_catalog_summary(self, user_id: str) -> CatalogSummaryRead:
@@ -164,6 +185,8 @@ class CatalogService:
         offset: int = 0,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        domestic_only: bool = False,
+        origin_value: str | None = None,
     ) -> CatalogFeedRead:
         snapshot = self.repository.get_catalog_feed(
             user_id=user_id,
@@ -172,6 +195,8 @@ class CatalogService:
             offset=offset,
             category_id=category_id,
             supplier_id=supplier_id,
+            domestic_only=domestic_only,
+            origin_value=origin_value,
         )
         return CatalogFeedRead(
             items=[

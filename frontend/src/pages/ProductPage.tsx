@@ -2,6 +2,8 @@ import {
   ArrowLeftOutlined,
   HeartFilled,
   HeartOutlined,
+  PrinterOutlined,
+  ShareAltOutlined,
   ShoppingCartOutlined,
   SwapOutlined,
 } from '@ant-design/icons'
@@ -702,6 +704,58 @@ function ProductPage() {
     void messageApi.success('Позиция отмечена как нерелевантная.')
   }
 
+  async function trackCompareLikeAction(source: 'share_button' | 'print_button') {
+    if (!sessionId || !item) {
+      return
+    }
+
+    await createSearchEvent({
+      session_id: sessionId,
+      event_type: 'comparison_added',
+      ste_id: item.id,
+      page_type: 'product',
+      payload: { source },
+      actor: { userId },
+    })
+  }
+
+  async function handleShare() {
+    if (!item) {
+      return
+    }
+
+    const shareUrl =
+      typeof window === 'undefined' ? '' : window.location.href
+
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        await navigator.share({
+          title: item.title,
+          text: `${item.title} · ${item.supplier_name}`,
+          url: shareUrl,
+        })
+      } else if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl)
+        void messageApi.success('Ссылка на карточку скопирована')
+      } else {
+        void messageApi.info('Поделиться можно через стандартное меню браузера')
+      }
+      await trackCompareLikeAction('share_button')
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return
+      }
+      void messageApi.error(error instanceof Error ? error.message : 'Не удалось поделиться карточкой')
+    }
+  }
+
+  async function handlePrint() {
+    await trackCompareLikeAction('print_button')
+    if (typeof window !== 'undefined') {
+      window.print()
+    }
+  }
+
   return (
     <PortalShell session={session} activeNav="catalog" onLogout={handleLogout}>
       {contextHolder}
@@ -813,6 +867,22 @@ function ProductPage() {
                   </SurfaceButton>
                   <SurfaceButton $tone={inCart ? 'success' : 'accent'} $emphasis={inCart ? 'soft' : 'solid'} icon={<ShoppingCartOutlined />} onClick={() => cartMutation.mutate()}>
                     {inCart ? 'Добавить ещё' : 'В корзину'}
+                  </SurfaceButton>
+                  <SurfaceButton
+                    $tone="neutral"
+                    $emphasis="soft"
+                    icon={<ShareAltOutlined />}
+                    onClick={() => void handleShare()}
+                  >
+                    Поделиться
+                  </SurfaceButton>
+                  <SurfaceButton
+                    $tone="neutral"
+                    $emphasis="soft"
+                    icon={<PrinterOutlined />}
+                    onClick={() => void handlePrint()}
+                  >
+                    Распечатать
                   </SurfaceButton>
                   <SurfaceButton $tone="danger" $emphasis="soft" onClick={markIrrelevant}>
                     Нерелевантно

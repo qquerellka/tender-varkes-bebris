@@ -2,7 +2,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_auth_service, get_current_actor, get_session_dependency
-from app.domain.auth.schemas import AuthSessionRead, DemoLoginRequest, DemoUserRead
+from app.domain.auth.schemas import (
+    AuthSessionRead,
+    CustomerInnLoginRequest,
+    CustomerInnRead,
+    DemoLoginRequest,
+    DemoUserRead,
+)
 from app.domain.auth.service import AuthService
 from app.domain.search.schemas import CurrentActor
 
@@ -24,6 +30,25 @@ def login_demo(
 ) -> AuthSessionRead:
     auth_service = get_auth_service(session)
     return auth_service.login_demo(payload)
+
+
+@router.get("/customer-organizations", response_model=list[CustomerInnRead])
+def list_customer_organizations(
+    query: str,
+    limit: int = 8,
+    session: Session = Depends(get_session_dependency),
+) -> list[CustomerInnRead]:
+    auth_service = get_auth_service(session)
+    return auth_service.list_customer_accounts(query=query, limit=limit)
+
+
+@router.post("/login-inn", response_model=AuthSessionRead)
+def login_customer_by_inn(
+    payload: CustomerInnLoginRequest,
+    session: Session = Depends(get_session_dependency),
+) -> AuthSessionRead:
+    auth_service = get_auth_service(session)
+    return auth_service.login_customer_by_inn(payload)
 
 
 @router.get("/me", response_model=AuthSessionRead)

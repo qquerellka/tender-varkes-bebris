@@ -8,10 +8,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, inspect, insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.auth.demo import ensure_demo_profiles
+from app.auth.portal_customers import (
+    build_portal_customer_org_id,
+    build_portal_customer_user_id,
+    normalize_buyer_inn,
+)
 from app.db.models import (
     CartItemModel,
     CategoryModel,
@@ -156,7 +163,27 @@ def _flush_rows(
     if not rows:
         return 0
 
-    session.execute(insert(model), rows)
+    mapper = inspect(model)
+    primary_keys = [column.name for column in mapper.primary_key]
+    updatable_columns = [
+        column.name for column in mapper.columns if column.name not in primary_keys
+    ]
+    dialect_name = session.bind.dialect.name if session.bind is not None else ""
+
+    if primary_keys and updatable_columns and dialect_name in {"postgresql", "sqlite"}:
+        insert_factory = pg_insert if dialect_name == "postgresql" else sqlite_insert
+        statement = insert_factory(model).values(rows)
+        statement = statement.on_conflict_do_update(
+            index_elements=primary_keys,
+            set_={
+                column_name: getattr(statement.excluded, column_name)
+                for column_name in updatable_columns
+            },
+        )
+        session.execute(statement)
+    else:
+        session.execute(insert(model), rows)
+
     inserted_count = len(rows)
     rows.clear()
     session.commit()
@@ -441,6 +468,7 @@ def import_portal_csv_dataset(
         stats[key] += value
 
     buyer_counter: Counter[tuple[str, str, str]] = Counter()
+    buyer_name_by_inn: dict[str, Counter[str]] = defaultdict(Counter)
     with contracts_csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle, delimiter=";")
         for row_index, row in enumerate(reader, start=1):
@@ -456,12 +484,43 @@ def import_portal_csv_dataset(
                 _normalize_space(buyer_region),
             )
             buyer_counter[buyer_key] += 1
+            normalized_buyer_inn = normalize_buyer_inn(buyer_inn)
+            if normalized_buyer_inn:
+                buyer_name_by_inn[normalized_buyer_inn][
+                    _normalize_space(buyer_name) or f"Заказчик {normalized_buyer_inn}"
+                ] += 1
 
     assigned_buyers = buyer_counter.most_common(len(CUSTOMER_DEMO_USER_IDS))
-    user_to_buyer: dict[str, tuple[str, str, str]] = {}
+    buyer_to_demo_users: dict[tuple[str, str, str], list[str]] = defaultdict(list)
     for index, user_id in enumerate(CUSTOMER_DEMO_USER_IDS):
         if assigned_buyers:
-            user_to_buyer[user_id] = assigned_buyers[min(index, len(assigned_buyers) - 1)][0]
+            assigned_buyer = assigned_buyers[min(index, len(assigned_buyers) - 1)][0]
+            buyer_to_demo_users[assigned_buyer].append(user_id)
+
+    portal_customer_accounts: dict[str, tuple[str, str]] = {}
+    pending_customer_organizations: list[dict] = []
+    pending_customer_users: list[dict] = []
+    for buyer_inn, name_counter in buyer_name_by_inn.items():
+        organization_name = name_counter.most_common(1)[0][0][:255]
+        organization_id = build_portal_customer_org_id(buyer_inn)
+        user_id = build_portal_customer_user_id(buyer_inn)
+        portal_customer_accounts[buyer_inn] = (user_id, organization_id)
+        pending_customer_organizations.append(
+            {"id": organization_id, "name": organization_name}
+        )
+        pending_customer_users.append(
+            {
+                "id": user_id,
+                "organization_id": organization_id,
+                "name": organization_name,
+                "role": "customer",
+            }
+        )
+
+    stats["portal_customer_organizations"] += _flush_rows(
+        session, OrganizationModel, pending_customer_organizations
+    )
+    stats["portal_customer_users"] += _flush_rows(session, UserModel, pending_customer_users)
 
     demo_users = {
         user_id: session.get(UserModel, user_id)
@@ -472,12 +531,18 @@ def import_portal_csv_dataset(
     user_category_counts: dict[str, Counter[str]] = defaultdict(Counter)
     user_supplier_counts: dict[str, Counter[str]] = defaultdict(Counter)
     user_query_counts: dict[str, Counter[str]] = defaultdict(Counter)
-    user_recent_ste_ids: dict[str, deque[str]] = {
-        user_id: deque(maxlen=12) for user_id in CUSTOMER_DEMO_USER_IDS
-    }
+    user_recent_ste_ids: dict[str, deque[str]] = defaultdict(lambda: deque(maxlen=12))
     org_category_counts: dict[str, Counter[str]] = defaultdict(Counter)
     org_popular_ste_counts: dict[str, Counter[str]] = defaultdict(Counter)
     user_purchase_counts: Counter[str] = Counter()
+    user_organization_ids: dict[str, str] = {
+        user_id: user.organization_id
+        for user_id, user in demo_users.items()
+        if user is not None
+    }
+    for buyer_inn, account in portal_customer_accounts.items():
+        user_id, organization_id = account
+        user_organization_ids[user_id] = organization_id
 
     with contracts_csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle, delimiter=";")
@@ -493,15 +558,14 @@ def import_portal_csv_dataset(
                 _normalize_space(buyer_name),
                 _normalize_space(buyer_region),
             )
+            normalized_buyer_inn = normalize_buyer_inn(buyer_inn)
+            matched_user_ids = list(buyer_to_demo_users.get(buyer_key, ()))
+            portal_customer_account = portal_customer_accounts.get(normalized_buyer_inn)
+            if portal_customer_account is not None:
+                matched_user_ids.append(portal_customer_account[0])
+            matched_user_ids = list(dict.fromkeys(matched_user_ids))
 
-            matched_user_id = next(
-                (user_id for user_id, selected_buyer in user_to_buyer.items() if buyer_key == selected_buyer),
-                None,
-            )
-            if matched_user_id is None:
-                continue
-
-            if user_purchase_counts[matched_user_id] >= purchase_history_limit:
+            if not matched_user_ids:
                 continue
 
             sample = _pick_best_sample(
@@ -513,50 +577,51 @@ def import_portal_csv_dataset(
             if sample is None:
                 continue
 
-            user_purchase_counts[matched_user_id] += 1
-            purchase_id = _stable_id("purchase", f"{matched_user_id}:{row_index}:{sample.ste_id}")
-            demo_user = demo_users.get(matched_user_id)
-            if demo_user is None:
-                continue
-
-            organization_id = demo_user.organization_id
             query_text = " ".join(_extract_tokens(title)[:6]) or _normalize_space(title)[:80]
+            for matched_user_id in matched_user_ids:
+                if user_purchase_counts[matched_user_id] >= purchase_history_limit:
+                    continue
 
-            purchase_rows.append(
-                {
-                    "id": purchase_id,
-                    "user_id": matched_user_id,
-                    "organization_id": organization_id,
-                    "ste_id": sample.ste_id,
-                    "quantity": "1",
-                    "price": _normalize_space(price) or "0",
-                    "purchased_at": _parse_datetime(purchased_at),
-                }
-            )
-            user_category_counts[matched_user_id][sample.category_name] += 1
-            user_supplier_counts[matched_user_id][sample.supplier_name] += 1
-            user_query_counts[matched_user_id][query_text] += 1
-            org_category_counts[organization_id][sample.category_name] += 1
-            org_popular_ste_counts[organization_id][sample.ste_id] += 1
-            if sample.ste_id not in user_recent_ste_ids[matched_user_id]:
-                user_recent_ste_ids[matched_user_id].appendleft(sample.ste_id)
+                organization_id = user_organization_ids.get(matched_user_id)
+                if not organization_id:
+                    continue
 
-            if len(purchase_rows) >= 1000:
-                stats["purchase_history"] += _flush_rows(session, PurchaseHistoryModel, purchase_rows)
+                user_purchase_counts[matched_user_id] += 1
+                purchase_rows.append(
+                    {
+                        "id": _stable_id(
+                            "purchase", f"{matched_user_id}:{row_index}:{sample.ste_id}"
+                        ),
+                        "user_id": matched_user_id,
+                        "organization_id": organization_id,
+                        "ste_id": sample.ste_id,
+                        "quantity": "1",
+                        "price": _normalize_space(price) or "0",
+                        "purchased_at": _parse_datetime(purchased_at),
+                    }
+                )
+                user_category_counts[matched_user_id][sample.category_name] += 1
+                user_supplier_counts[matched_user_id][sample.supplier_name] += 1
+                user_query_counts[matched_user_id][query_text] += 1
+                org_category_counts[organization_id][sample.category_name] += 1
+                org_popular_ste_counts[organization_id][sample.ste_id] += 1
+                if sample.ste_id not in user_recent_ste_ids[matched_user_id]:
+                    user_recent_ste_ids[matched_user_id].appendleft(sample.ste_id)
+
+                if len(purchase_rows) >= 1000:
+                    stats["purchase_history"] += _flush_rows(
+                        session, PurchaseHistoryModel, purchase_rows
+                    )
 
     stats["purchase_history"] += _flush_rows(session, PurchaseHistoryModel, purchase_rows)
 
     profile_rows: list[dict] = []
     org_profile_rows: list[dict] = []
-    for user_id in CUSTOMER_DEMO_USER_IDS:
-        user = demo_users.get(user_id)
-        if user is None:
-            continue
-
+    for user_id, organization_id in user_organization_ids.items():
         profile_rows.append(
             {
                 "user_id": user_id,
-                "organization_id": user.organization_id,
+                "organization_id": organization_id,
                 "top_categories_json": [name for name, _ in user_category_counts[user_id].most_common(6)],
                 "recent_ste_ids_json": list(user_recent_ste_ids[user_id]),
                 "top_suppliers_json": [name for name, _ in user_supplier_counts[user_id].most_common(6)],

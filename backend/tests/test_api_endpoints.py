@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.dependencies import get_session_dependency
+from app.auth.portal_customers import build_portal_customer_org_id, build_portal_customer_user_id
 from app.db.base import Base
+from app.db.models import OrgSearchProfileModel, OrganizationModel, PurchaseHistoryModel, UserModel, UserSearchProfileModel
 from app.db.repositories.search import SearchRepository
 from app.db.seed import seed_demo_data
 from app.main import app
@@ -101,6 +103,77 @@ class ApiEndpointsTests(unittest.TestCase):
         )
         self.assertEqual(purchases_response.status_code, 200)
         self.assertEqual(purchases_response.json(), [])
+
+    def test_auth_supports_login_for_customer_from_contract_inn(self) -> None:
+        buyer_inn = "7701234567"
+        organization_id = build_portal_customer_org_id(buyer_inn)
+        user_id = build_portal_customer_user_id(buyer_inn)
+
+        with self.session_factory() as session:
+            session.merge(OrganizationModel(id=organization_id, name="Тестовый заказчик по ИНН"))
+            session.merge(
+                UserModel(
+                    id=user_id,
+                    organization_id=organization_id,
+                    name="Тестовый заказчик по ИНН",
+                    role="customer",
+                )
+            )
+            session.merge(
+                PurchaseHistoryModel(
+                    id="purchase_test_inn",
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    ste_id="ste_107",
+                    quantity="1",
+                    price="1000",
+                )
+            )
+            session.merge(
+                UserSearchProfileModel(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    top_categories_json=["Офис и снабжение"],
+                    recent_ste_ids_json=["ste_107"],
+                    top_suppliers_json=['ООО "МосСнаб"'],
+                    popular_queries_json=["бумага офисная"],
+                )
+            )
+            session.merge(
+                OrgSearchProfileModel(
+                    organization_id=organization_id,
+                    top_categories_json=["Офис и снабжение"],
+                    popular_ste_ids_json=["ste_107"],
+                )
+            )
+            session.commit()
+
+        customers_response = self.client.get(
+            "/api/v1/auth/customer-organizations",
+            params={"query": "7701"},
+        )
+        self.assertEqual(customers_response.status_code, 200)
+        customers = customers_response.json()
+        self.assertTrue(any(item["buyer_inn"] == buyer_inn for item in customers))
+
+        login_response = self.client.post(
+            "/api/v1/auth/login-inn",
+            json={"buyer_inn": buyer_inn},
+        )
+        self.assertEqual(login_response.status_code, 200)
+        session_payload = login_response.json()
+        self.assertEqual(session_payload["user_id"], user_id)
+        self.assertEqual(session_payload["organization_id"], organization_id)
+        self.assertEqual(session_payload["auth_method"], "inn")
+        self.assertEqual(session_payload["buyer_inn"], buyer_inn)
+        self.assertTrue(session_payload["has_history"])
+
+        profile_response = self.client.get(
+            "/api/v1/profile/search",
+            headers=self._headers(user_id),
+        )
+        self.assertEqual(profile_response.status_code, 200)
+        self.assertIn("Офис и снабжение", profile_response.json()["top_categories"])
 
     def test_search_and_debug_endpoints_expose_runtime_status(self) -> None:
         actor_id = "demo_customer_transport"

@@ -4,6 +4,8 @@ export type SearchFilters = {
   strict_match: boolean
   category_id?: string
   supplier_id?: string
+  domestic_only?: boolean
+  origin_value?: string
 }
 
 export type ActorContext = {
@@ -22,6 +24,16 @@ export type DemoUser = {
   entry_note?: string | null
 }
 
+export type CustomerInnAccount = {
+  user_id: string
+  organization_id: string
+  organization_name: string
+  buyer_inn: string
+  contracts_count: number
+  has_history: boolean
+  entry_note?: string | null
+}
+
 export type AuthSession = {
   user_id: string
   name: string
@@ -32,6 +44,8 @@ export type AuthSession = {
   has_history?: boolean
   entry_note?: string | null
   persona?: string | null
+  auth_method?: string
+  buyer_inn?: string | null
 }
 
 export type SearchItem = {
@@ -75,6 +89,12 @@ export type SearchHistoryItem = {
 
 export type SearchHistoryResponse = {
   items: SearchHistoryItem[]
+}
+
+export type SearchHistoryClearResponse = {
+  events_deleted: number
+  impressions_deleted: number
+  sessions_deleted: number
 }
 
 export type SearchActivityItem = {
@@ -168,6 +188,12 @@ export type CatalogCategory = {
 export type CatalogSupplier = {
   id: string
   name: string
+}
+
+export type ProductionOriginOption = {
+  value: string
+  label: string
+  item_count: number
 }
 
 export type CatalogSummaryCategory = {
@@ -391,6 +417,20 @@ export async function loginDemoUser(userId: string): Promise<AuthSession> {
   return data
 }
 
+export async function getCustomerAccounts(query: string): Promise<CustomerInnAccount[]> {
+  const { data } = await api.get<CustomerInnAccount[]>('/api/v1/auth/customer-organizations', {
+    params: { query },
+  })
+  return data
+}
+
+export async function loginCustomerByInn(buyerInn: string): Promise<AuthSession> {
+  const { data } = await api.post<AuthSession>('/api/v1/auth/login-inn', {
+    buyer_inn: buyerInn,
+  })
+  return data
+}
+
 export async function getMe(actor: ActorContext): Promise<AuthSession> {
   const { data } = await api.get<AuthSession>('/api/v1/auth/me', buildActorConfig(actor))
   return data
@@ -412,6 +452,14 @@ export async function searchCatalog(payload: {
 
 export async function getSearchHistory(actor: ActorContext): Promise<SearchHistoryResponse> {
   const { data } = await api.get<SearchHistoryResponse>(
+    '/api/v1/search/history',
+    buildActorConfig(actor),
+  )
+  return data
+}
+
+export async function clearSearchHistory(actor: ActorContext): Promise<SearchHistoryClearResponse> {
+  const { data } = await api.delete<SearchHistoryClearResponse>(
     '/api/v1/search/history',
     buildActorConfig(actor),
   )
@@ -482,6 +530,11 @@ export async function getSuppliers(): Promise<CatalogSupplier[]> {
   return data
 }
 
+export async function getProductionOrigins(): Promise<ProductionOriginOption[]> {
+  const { data } = await api.get<ProductionOriginOption[]>('/api/v1/catalog/production-origins')
+  return data
+}
+
 export async function getCatalogSummary(actor: ActorContext): Promise<CatalogSummary> {
   const { data } = await api.get<CatalogSummary>(
     '/api/v1/catalog/summary',
@@ -496,6 +549,8 @@ export async function getCatalogFeed(payload: {
   offset?: number
   category_id?: string
   supplier_id?: string
+  domestic_only?: boolean
+  origin_value?: string
 }): Promise<CatalogFeedResponse> {
   const { actor, ...params } = payload
   const { data } = await api.get<CatalogFeedResponse>('/api/v1/catalog/feed', {

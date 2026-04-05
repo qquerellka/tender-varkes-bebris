@@ -9,6 +9,7 @@ from app.api.dependencies import (
 from app.domain.search.schemas import (
     CurrentActor,
     SearchActivityResponse,
+    SearchHistoryClearResponse,
     SearchHistoryResponse,
     SearchRequest,
     SearchResponse,
@@ -77,6 +78,15 @@ def history(
 ) -> SearchHistoryResponse:
     search_service = get_search_service(session)
     return search_service.get_history(actor=actor, limit=limit)
+
+
+@router.delete("/history", response_model=SearchHistoryClearResponse)
+def clear_history(
+    session: Session = Depends(get_session_dependency),
+    actor: CurrentActor = Depends(get_current_actor),
+) -> SearchHistoryClearResponse:
+    search_service = get_search_service(session)
+    return search_service.clear_history(actor=actor)
 
 
 @router.get("/activity", response_model=SearchActivityResponse)

@@ -57,7 +57,6 @@ const TopBarInner = styled.div`
 const Brand = styled.button`
   display: flex;
   align-items: center;
-  gap: 14px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -65,35 +64,15 @@ const Brand = styled.button`
   cursor: pointer;
 `
 
-const BrandMark = styled.div`
-  width: 52px;
-  height: 52px;
-  border-radius: 14px;
-  background:
-    linear-gradient(135deg, #1f4e86 0%, #335d90 45%, #d93c30 45%, #d93c30 72%, #f0f4f8 72%);
-  box-shadow: inset 0 0 0 4px rgba(255, 255, 255, 0.82);
-`
+const BrandLogo = styled.img`
+  display: block;
+  width: auto;
+  height: 48px;
+  object-fit: contain;
 
-const BrandText = styled.div`
-  display: grid;
-  gap: 2px;
-  text-align: left;
-`
-
-const BrandTitle = styled.span`
-  color: #cb3428;
-  font-size: 24px;
-  font-weight: 800;
-  line-height: 1;
-  text-transform: uppercase;
-`
-
-const BrandSubtitle = styled.span`
-  color: #95a2b1;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  @media (max-width: 960px) {
+    height: 42px;
+  }
 `
 
 const NavRail = styled.nav`
@@ -161,11 +140,7 @@ function PortalShell({ session, activeNav, children, headerTools, onLogout }: Po
       <TopBar>
         <TopBarInner>
           <Brand type="button" onClick={() => navigate('/')}>
-            <BrandMark />
-            <BrandText>
-              <BrandTitle>Портал</BrandTitle>
-              <BrandSubtitle>Поставщиков</BrandSubtitle>
-            </BrandText>
+            <BrandLogo src="/portal_logo.png" alt="Портал поставщиков" />
           </Brand>
 
           <NavRail aria-label="Основная навигация">

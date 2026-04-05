@@ -34,8 +34,10 @@ import {
   addCartItem,
   addComparisonItem,
   addFavorite,
+  clearSearchHistory,
   createSearchEvent,
   createSearchImpressions,
+  getCustomerAccounts,
   getCartItems,
   getCategories,
   getSearchActivity,
@@ -45,11 +47,13 @@ import {
   getDemoUsers,
   getFavorites,
   getPurchaseHistory,
+  getProductionOrigins,
   getSearchHistory,
   getSearchProfile,
   getSearchSuggestions,
   getSupplierInsights,
   getSuppliers,
+  loginCustomerByInn,
   loginDemoUser,
   removeComparisonItem,
   removeFavorite,
@@ -62,7 +66,9 @@ import {
   type CatalogSummary,
   type CatalogSupplier,
   type ComparisonItem,
+  type CustomerInnAccount,
   type FavoriteItem,
+  type ProductionOriginOption,
   type PurchaseHistoryItem,
   type SearchHistoryItem,
   type SearchActivityItem,
@@ -125,12 +131,15 @@ const STORAGE_KEYS = {
   search: 'portal-search-query-v2',
   category: 'portal-search-category-v2',
   supplier: 'portal-search-supplier-v2',
+  origin: 'portal-search-origin-v1',
+  domestic: 'portal-search-domestic-v1',
   strict: 'portal-search-strict-v2',
   sort: 'portal-search-sort-v1',
 } as const
 
-const CATALOG_PAGE_SIZE = 9
-const FAVORITES_PAGE_SIZE = 8
+const CATALOG_PAGE_SIZE = 18
+const FAVORITES_PAGE_SIZE = 18
+const RESULTS_SCROLL_OFFSET = 104
 
 type WorkspaceTab = 'catalog' | 'favorites' | 'compare'
 type SortMode = 'relevance' | 'title_asc' | 'supplier_asc'
@@ -457,38 +466,19 @@ const Screen = styled.div`
 const Brand = styled.div`
   display: flex;
   align-items: center;
-  gap: 14px;
   min-width: 0;
 `
 
-const BrandMark = styled.div`
-  width: 52px;
-  height: 52px;
-  border-radius: 14px;
-  background:
-    linear-gradient(135deg, #1f4e86 0%, #335d90 45%, #d93c30 45%, #d93c30 72%, #f0f4f8 72%);
-  box-shadow: inset 0 0 0 4px rgba(255, 255, 255, 0.82);
-`
+const BrandLogo = styled.img`
+  display: block;
+  width: auto;
+  max-width: min(100%, 280px);
+  height: 60px;
+  object-fit: contain;
 
-const BrandText = styled.div`
-  display: grid;
-  gap: 2px;
-`
-
-const BrandTitle = styled.span`
-  color: #cb3428;
-  font-size: 24px;
-  font-weight: 800;
-  line-height: 1;
-  text-transform: uppercase;
-`
-
-const BrandSubtitle = styled.span`
-  color: #95a2b1;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  @media (max-width: 960px) {
+    height: 50px;
+  }
 `
 
 const HeaderTools = styled.div`
@@ -662,6 +652,14 @@ const SidebarHeader = styled.div`
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+`
+
+const ActivityControls = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
 `
 
 const SidebarTitle = styled(Typography.Title)`
@@ -1310,6 +1308,34 @@ const LoginHint = styled.div`
   background: rgba(255, 255, 255, 0.88);
 `
 
+const LoginModeSwitch = styled.div`
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: fit-content;
+  border: 1px solid #d7dee7;
+  background: rgba(255, 255, 255, 0.82);
+`
+
+const LoginModeButton = styled.button<{ $active: boolean }>`
+  border: 0;
+  padding: 12px 16px;
+  color: ${({ $active }) => ($active ? '#20477f' : '#68788b')};
+  font: inherit;
+  font-weight: 700;
+  background: ${({ $active }) => ($active ? '#eef5ff' : 'transparent')};
+  cursor: pointer;
+`
+
+const LoginSearchPanel = styled.div`
+  display: grid;
+  gap: 14px;
+`
+
+const LoginSearchMeta = styled.div`
+  color: #7d8b9b;
+  font-size: 13px;
+`
+
 function HomePage() {
   const [session, setSession] = useState<AuthSession | null>(() => readStoredSession())
 
@@ -1334,17 +1360,30 @@ function HomePage() {
 }
 
 function LoginScreen({ onLogin }: { onLogin: (value: AuthSession) => void }) {
+  const [loginMode, setLoginMode] = useState<'demo' | 'inn'>('demo')
   const [selectedUserId, setSelectedUserId] = useState('')
+  const [selectedBuyerInn, setSelectedBuyerInn] = useState('')
+  const [innQuery, setInnQuery] = useState('')
   const [messageApi, contextHolder] = message.useMessage()
+  const deferredInnQuery = useDeferredValue(innQuery)
+  const normalizedInnQuery = deferredInnQuery.replace(/\D/g, '')
 
   const demoUsersQuery = useQuery({
     queryKey: ['demo-users'],
     queryFn: getDemoUsers,
   })
 
-  const effectiveSelectedUserId = selectedUserId || demoUsersQuery.data?.[0]?.id || ''
+  const customerAccountsQuery = useQuery({
+    queryKey: ['customer-accounts', normalizedInnQuery],
+    queryFn: () => getCustomerAccounts(normalizedInnQuery),
+    enabled: loginMode === 'inn' && normalizedInnQuery.length >= 3,
+  })
 
-  const loginMutation = useMutation({
+  const effectiveSelectedUserId = selectedUserId || demoUsersQuery.data?.[0]?.id || ''
+  const effectiveSelectedBuyerInn =
+    selectedBuyerInn || customerAccountsQuery.data?.[0]?.buyer_inn || normalizedInnQuery || ''
+
+  const demoLoginMutation = useMutation({
     mutationFn: loginDemoUser,
     onSuccess: (data) => {
       onLogin(data)
@@ -1355,6 +1394,36 @@ function LoginScreen({ onLogin }: { onLogin: (value: AuthSession) => void }) {
     },
   })
 
+  const innLoginMutation = useMutation({
+    mutationFn: loginCustomerByInn,
+    onSuccess: (data) => {
+      onLogin(data)
+    },
+    onError: (error) => {
+      const description = error instanceof Error ? error.message : 'Не удалось выполнить вход'
+      void messageApi.error(description)
+    },
+  })
+
+  const isLoginPending = demoLoginMutation.isPending || innLoginMutation.isPending
+
+  function handleLogin() {
+    if (loginMode === 'inn') {
+      if (!effectiveSelectedBuyerInn) {
+        return
+      }
+      innLoginMutation.mutate(effectiveSelectedBuyerInn)
+      return
+    }
+
+    if (!effectiveSelectedUserId) {
+      return
+    }
+    demoLoginMutation.mutate(effectiveSelectedUserId)
+  }
+
+  const customerCards: CustomerInnAccount[] = customerAccountsQuery.data ?? []
+
   return (
     <Screen>
       {contextHolder}
@@ -1362,20 +1431,16 @@ function LoginScreen({ onLogin }: { onLogin: (value: AuthSession) => void }) {
         <LoginHero>
           <div style={{ display: 'grid', gap: 18 }}>
             <Brand>
-              <BrandMark />
-              <BrandText>
-                <BrandTitle>Портал</BrandTitle>
-                <BrandSubtitle>Поставщиков 2026</BrandSubtitle>
-              </BrandText>
+              <BrandLogo src="/portal_logo.png" alt="Портал поставщиков" />
             </Brand>
 
             <Typography.Title level={1} style={{ margin: 0, color: '#2b3950', fontSize: 42 }}>
               Вход в демо-кабинет закупок
             </Typography.Title>
             <Typography.Paragraph style={{ margin: 0, color: '#607085', fontSize: 18 }}>
-              Выберите готового пользователя и зайдите в систему без пароля. Кабинет
-              поддерживает роли заказчика и поставщика, а каталог построен в визуальном
-              стиле платформы из Figma UI kit.
+              Можно зайти как в готовый demo-кабинет или выбрать реального заказчика по ИНН
+              из загруженного `Контракты*.csv`, чтобы посмотреть, как история закупок влияет
+              на поиск и рекомендации.
             </Typography.Paragraph>
 
             <LoginHintList>
@@ -1386,65 +1451,134 @@ function LoginScreen({ onLogin }: { onLogin: (value: AuthSession) => void }) {
           </div>
 
           <div style={{ display: 'grid', gap: 18 }}>
-            {demoUsersQuery.isLoading ? (
-              <Skeleton active paragraph={{ rows: 6 }} />
-            ) : (
-              <LoginCards>
-                {(demoUsersQuery.data ?? []).map((user) => {
-                  const entryMode = user.entry_mode ?? (user.has_history ? 'history' : 'empty')
-                  const entryLabel =
-                    entryMode === 'history'
-                      ? 'С историей'
-                      : entryMode === 'context'
-                        ? 'С контекстом'
-                        : 'Пустой кабинет'
+            <LoginModeSwitch>
+              <LoginModeButton
+                type="button"
+                $active={loginMode === 'demo'}
+                onClick={() => setLoginMode('demo')}
+              >
+                Demo-пользователи
+              </LoginModeButton>
+              <LoginModeButton
+                type="button"
+                $active={loginMode === 'inn'}
+                onClick={() => setLoginMode('inn')}
+              >
+                Вход по ИНН
+              </LoginModeButton>
+            </LoginModeSwitch>
 
-                  return (
-                    <LoginCard
-                      key={user.id}
-                      type="button"
-                      $active={user.id === effectiveSelectedUserId}
-                      onClick={() => setSelectedUserId(user.id)}
-                    >
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <LoginRole $role={user.role}>
-                          {user.role === 'supplier' ? 'Поставщик' : 'Заказчик'}
-                        </LoginRole>
-                        <LoginState $mode={entryMode}>
-                          {entryLabel}
-                        </LoginState>
-                      </div>
-                      <Typography.Title level={4} style={{ margin: 0 }}>
-                        {user.name}
-                      </Typography.Title>
-                      <Typography.Text style={{ color: '#5c6e84' }}>
-                        {user.organization_name}
-                      </Typography.Text>
-                      <Typography.Text style={{ color: '#6f7d8e' }}>
-                        {user.persona}
-                      </Typography.Text>
-                      {user.entry_note ? (
-                        <Typography.Text style={{ color: '#8a97a8', fontSize: 13 }}>
-                          {user.entry_note}
+            {loginMode === 'demo' ? (
+              demoUsersQuery.isLoading ? (
+                <Skeleton active paragraph={{ rows: 6 }} />
+              ) : (
+                <LoginCards>
+                  {(demoUsersQuery.data ?? []).map((user) => {
+                    const entryMode = user.entry_mode ?? (user.has_history ? 'history' : 'empty')
+                    const entryLabel =
+                      entryMode === 'history'
+                        ? 'С историей'
+                        : entryMode === 'context'
+                          ? 'С контекстом'
+                          : 'Пустой кабинет'
+
+                    return (
+                      <LoginCard
+                        key={user.id}
+                        type="button"
+                        $active={user.id === effectiveSelectedUserId}
+                        onClick={() => setSelectedUserId(user.id)}
+                      >
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <LoginRole $role={user.role}>
+                            {user.role === 'supplier' ? 'Поставщик' : 'Заказчик'}
+                          </LoginRole>
+                          <LoginState $mode={entryMode}>
+                            {entryLabel}
+                          </LoginState>
+                        </div>
+                        <Typography.Title level={4} style={{ margin: 0 }}>
+                          {user.name}
+                        </Typography.Title>
+                        <Typography.Text style={{ color: '#5c6e84' }}>
+                          {user.organization_name}
                         </Typography.Text>
-                      ) : null}
-                    </LoginCard>
-                  )
-                })}
-              </LoginCards>
+                        <Typography.Text style={{ color: '#6f7d8e' }}>
+                          {user.persona}
+                        </Typography.Text>
+                        {user.entry_note ? (
+                          <Typography.Text style={{ color: '#8a97a8', fontSize: 13 }}>
+                            {user.entry_note}
+                          </Typography.Text>
+                        ) : null}
+                      </LoginCard>
+                    )
+                  })}
+                </LoginCards>
+              )
+            ) : (
+              <LoginSearchPanel>
+                <Input
+                  size="large"
+                  prefix={<SearchOutlined />}
+                  placeholder="Введите ИНН заказчика из Контракты*.csv"
+                  value={innQuery}
+                  onChange={(event) => {
+                    setInnQuery(event.target.value)
+                    setSelectedBuyerInn('')
+                  }}
+                />
+                {normalizedInnQuery.length < 3 ? (
+                  <LoginSearchMeta>
+                    Введите минимум 3 цифры ИНН. Список формируется по реально загруженным
+                    заказчикам из контрактного CSV.
+                  </LoginSearchMeta>
+                ) : customerAccountsQuery.isLoading ? (
+                  <Skeleton active paragraph={{ rows: 4 }} />
+                ) : customerCards.length ? (
+                  <LoginCards>
+                    {customerCards.map((customer) => (
+                      <LoginCard
+                        key={customer.user_id}
+                        type="button"
+                        $active={customer.buyer_inn === effectiveSelectedBuyerInn}
+                        onClick={() => setSelectedBuyerInn(customer.buyer_inn)}
+                      >
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <LoginRole $role="customer">Заказчик</LoginRole>
+                          <LoginState $mode={customer.has_history ? 'history' : 'empty'}>
+                            {customer.has_history ? 'С историей' : 'Пустой кабинет'}
+                          </LoginState>
+                        </div>
+                        <Typography.Title level={4} style={{ margin: 0 }}>
+                          {customer.organization_name}
+                        </Typography.Title>
+                        <Typography.Text style={{ color: '#5c6e84' }}>
+                          ИНН {customer.buyer_inn}
+                        </Typography.Text>
+                        <Typography.Text style={{ color: '#6f7d8e' }}>
+                          Контрактов в истории: {customer.contracts_count}
+                        </Typography.Text>
+                        {customer.entry_note ? (
+                          <Typography.Text style={{ color: '#8a97a8', fontSize: 13 }}>
+                            {customer.entry_note}
+                          </Typography.Text>
+                        ) : null}
+                      </LoginCard>
+                    ))}
+                  </LoginCards>
+                ) : (
+                  <Empty description="По этому ИНН заказчик в загруженных контрактах не найден" />
+                )}
+              </LoginSearchPanel>
             )}
 
             <Button
               type="primary"
               size="large"
-              loading={loginMutation.isPending}
-              disabled={!effectiveSelectedUserId}
-              onClick={() => {
-                if (!effectiveSelectedUserId) {
-                  return
-                }
-                loginMutation.mutate(effectiveSelectedUserId)
-              }}
+              loading={isLoginPending}
+              disabled={loginMode === 'demo' ? !effectiveSelectedUserId : !effectiveSelectedBuyerInn}
+              onClick={handleLogin}
             >
               Войти в кабинет
             </Button>
@@ -1470,6 +1604,8 @@ function Workspace({
   const [searchValue, setSearchValue] = useState(() => readStoredValue(STORAGE_KEYS.search))
   const [selectedCategoryId, setSelectedCategoryId] = useState(() => readStoredValue(STORAGE_KEYS.category))
   const [selectedSupplierId, setSelectedSupplierId] = useState(() => readStoredValue(STORAGE_KEYS.supplier))
+  const [selectedOriginValue, setSelectedOriginValue] = useState(() => readStoredValue(STORAGE_KEYS.origin))
+  const [domesticOnly, setDomesticOnly] = useState(() => readStoredValue(STORAGE_KEYS.domestic) === 'true')
   const [strictMatch, setStrictMatch] = useState(() => readStoredValue(STORAGE_KEYS.strict) === 'true')
   const [sortMode, setSortMode] = useState<SortMode>(() => {
     const stored = readStoredValue(STORAGE_KEYS.sort)
@@ -1481,6 +1617,7 @@ function Workspace({
   const [catalogPage, setCatalogPage] = useState(1)
   const [favoritesPage, setFavoritesPage] = useState(1)
   const deferredSearchValue = useDeferredValue(searchValue)
+  const catalogSectionRef = useRef<HTMLElement | null>(null)
   const scrollDepthMarksRef = useRef<Set<number>>(new Set())
   const sessionInteractionRef = useRef<Record<string, boolean>>({})
   const compareViewedSessionsRef = useRef<Set<string>>(new Set())
@@ -1493,9 +1630,11 @@ function Workspace({
     window.localStorage.setItem(STORAGE_KEYS.search, searchValue)
     window.localStorage.setItem(STORAGE_KEYS.category, selectedCategoryId)
     window.localStorage.setItem(STORAGE_KEYS.supplier, selectedSupplierId)
+    window.localStorage.setItem(STORAGE_KEYS.origin, selectedOriginValue)
+    window.localStorage.setItem(STORAGE_KEYS.domestic, String(domesticOnly))
     window.localStorage.setItem(STORAGE_KEYS.strict, String(strictMatch))
     window.localStorage.setItem(STORAGE_KEYS.sort, sortMode)
-  }, [searchValue, selectedCategoryId, selectedSupplierId, strictMatch, sortMode])
+  }, [searchValue, selectedCategoryId, selectedSupplierId, selectedOriginValue, domesticOnly, strictMatch, sortMode])
 
   const categoriesQuery = useQuery<CatalogCategory[]>({
     queryKey: ['catalog-categories'],
@@ -1512,12 +1651,19 @@ function Workspace({
     queryFn: getSuppliers,
   })
 
+  const productionOriginsQuery = useQuery<ProductionOriginOption[]>({
+    queryKey: ['catalog-production-origins'],
+    queryFn: getProductionOrigins,
+  })
+
   const feedQuery = useQuery<CatalogFeedResponse>({
     queryKey: [
       'catalog-feed',
       session.user_id,
       selectedCategoryId,
       selectedSupplierId,
+      selectedOriginValue,
+      domesticOnly,
       catalogPage,
     ],
     queryFn: () =>
@@ -1527,6 +1673,8 @@ function Workspace({
         offset: (catalogPage - 1) * CATALOG_PAGE_SIZE,
         category_id: selectedCategoryId || undefined,
         supplier_id: selectedSupplierId || undefined,
+        origin_value: selectedOriginValue || undefined,
+        domestic_only: domesticOnly,
       }),
   })
 
@@ -1574,6 +1722,24 @@ function Workspace({
   const cartQuery = useQuery<CartItem[]>({
     queryKey: ['cart-items', session.user_id],
     queryFn: () => getCartItems(actor),
+  })
+
+  const clearHistoryMutation = useMutation({
+    mutationFn: () => clearSearchHistory(actor),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['search-history', session.user_id] }),
+        queryClient.invalidateQueries({ queryKey: ['search-activity', session.user_id] }),
+        queryClient.invalidateQueries({ queryKey: ['search-profile', session.user_id] }),
+      ])
+      setActivityFilter('all')
+      void messageApi.success('История действий пользователя очищена')
+    },
+    onError: (error) => {
+      void messageApi.error(
+        error instanceof Error ? error.message : 'Не удалось очистить историю действий',
+      )
+    },
   })
 
   const currentSessionId =
@@ -1646,6 +1812,26 @@ function Workspace({
     (profileQuery.data?.active_signals.length ?? 0) +
     (profileQuery.data?.top_categories.length ?? 0) +
     (profileQuery.data?.popular_queries.length ?? 0)
+
+  function scrollToCatalogTop() {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const top =
+      (catalogSectionRef.current?.getBoundingClientRect().top ?? 0) + window.scrollY - RESULTS_SCROLL_OFFSET
+    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+  }
+
+  function handleCatalogPageChange(page: number) {
+    setCatalogPage(page)
+    scrollToCatalogTop()
+  }
+
+  function handleFavoritesPageChange(page: number) {
+    setFavoritesPage(page)
+    scrollToCatalogTop()
+  }
 
   function markSessionInteraction(sessionId: string | null) {
     if (!sessionId) {
@@ -1736,12 +1922,16 @@ function Workspace({
     overrides?: {
       categoryId?: string
       supplierId?: string
+      originValue?: string
+      domesticOnly?: boolean
       strictMatch?: boolean
     },
   ) {
     const query = (nextQuery ?? searchValue).trim()
     const effectiveCategoryId = (overrides?.categoryId ?? selectedCategoryId) || undefined
     const effectiveSupplierId = (overrides?.supplierId ?? selectedSupplierId) || undefined
+    const effectiveOriginValue = (overrides?.originValue ?? selectedOriginValue) || undefined
+    const effectiveDomesticOnly = overrides?.domesticOnly ?? domesticOnly
     const effectiveStrictMatch = overrides?.strictMatch ?? strictMatch
     if (!query) {
       setSearchState({ kind: 'idle' })
@@ -1789,6 +1979,8 @@ function Workspace({
           strict_match: effectiveStrictMatch,
           category_id: effectiveCategoryId,
           supplier_id: effectiveSupplierId,
+          origin_value: effectiveOriginValue,
+          domestic_only: effectiveDomesticOnly,
         },
         actor,
       })
@@ -1825,6 +2017,8 @@ function Workspace({
           results_count: response.items.length,
           category_id: effectiveCategoryId || '',
           supplier_id: effectiveSupplierId || '',
+          origin_value: effectiveOriginValue || '',
+          domestic_only: effectiveDomesticOnly,
           strict_match: effectiveStrictMatch,
           top_ste_ids: response.items.slice(0, 10).map((item) => item.id).join(','),
         },
@@ -1855,12 +2049,16 @@ function Workspace({
     setSearchValue(scenario.query)
     setSelectedCategoryId(scenario.categoryId ?? '')
     setSelectedSupplierId('')
+    setSelectedOriginValue('')
+    setDomesticOnly(false)
     setStrictMatch(Boolean(scenario.strictMatch))
     setActiveTab('catalog')
     setCatalogPage(1)
     await runSearch(scenario.query, undefined, {
       categoryId: scenario.categoryId,
       supplierId: undefined,
+      originValue: undefined,
+      domesticOnly: false,
       strictMatch: scenario.strictMatch,
     })
   }
@@ -1881,6 +2079,7 @@ function Workspace({
   function openCollectionStarterScenario(scenario: StarterScenario) {
     setActiveTab('catalog')
     setFavoritesPage(1)
+    scrollToCatalogTop()
     void applyStarterScenario(scenario)
   }
 
@@ -1888,6 +2087,7 @@ function Workspace({
     setActiveTab('catalog')
     setCatalogPage(1)
     setSearchValue(query)
+    scrollToCatalogTop()
     void runSearch(query)
   }
 
@@ -1956,6 +2156,45 @@ function Workspace({
       })
     }
     setSelectedSupplierId(nextValue)
+    setCatalogPage(1)
+  }
+
+  function handleOriginChange(value?: string) {
+    const nextValue = value ?? ''
+    if (currentSessionId && selectedOriginValue && selectedOriginValue !== nextValue) {
+      void createSearchEvent({
+        session_id: currentSessionId,
+        event_type: 'filter_removed',
+        page_type: 'catalog',
+        payload: { filter_name: 'origin_value', filter_value: selectedOriginValue },
+        actor,
+      })
+    }
+    if (currentSessionId && nextValue && nextValue !== selectedOriginValue) {
+      void createSearchEvent({
+        session_id: currentSessionId,
+        event_type: 'filter_applied',
+        page_type: 'catalog',
+        payload: { filter_name: 'origin_value', filter_value: nextValue },
+        actor,
+      })
+    }
+    setSelectedOriginValue(nextValue)
+    setCatalogPage(1)
+  }
+
+  function toggleDomesticOnly() {
+    const nextValue = !domesticOnly
+    if (currentSessionId) {
+      void createSearchEvent({
+        session_id: currentSessionId,
+        event_type: nextValue ? 'filter_applied' : 'filter_removed',
+        page_type: 'catalog',
+        payload: { filter_name: 'domestic_only', filter_value: nextValue },
+        actor,
+      })
+    }
+    setDomesticOnly(nextValue)
     setCatalogPage(1)
   }
 
@@ -2421,6 +2660,8 @@ function Workspace({
               <SearchAutocomplete
                 options={buildAutocompleteOptions(suggestionsQuery.data?.items ?? [])}
                 value={searchValue}
+                placement="bottomLeft"
+                getPopupContainer={(triggerNode) => triggerNode.parentElement ?? document.body}
                 onChange={(value) => setSearchValue(String(value))}
                 onSelect={(value) => {
                   const selectedValue = String(value)
@@ -2536,7 +2777,8 @@ function Workspace({
               <FilterStack>
                 <FilterMetaCard>
                   Текущий режим: {session.role === 'supplier' ? 'анализ конкурентов' : 'подбор закупки'}.
-                  Фильтры работают поверх каталога СТЕ и не меняют профиль пользователя.
+                  Фильтры работают поверх каталога СТЕ и не меняют профиль пользователя. Фильтр происхождения
+                  использует реальные атрибуты карточки товара.
                 </FilterMetaCard>
                 <FilterField>
                   <FilterLabel>Категория</FilterLabel>
@@ -2569,6 +2811,28 @@ function Workspace({
                   />
                 </FilterField>
                 <FilterField>
+                  <FilterLabel>Происхождение</FilterLabel>
+                  <Select
+                    size="large"
+                    placeholder="Страна / регион происхождения"
+                    value={selectedOriginValue || undefined}
+                    options={(productionOriginsQuery.data ?? []).map((item) => ({
+                      value: item.value,
+                      label: `${item.label} (${item.item_count.toLocaleString('ru-RU')})`,
+                    }))}
+                    onChange={(value) => handleOriginChange(value)}
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                  />
+                </FilterField>
+                <FilterField>
+                  <FilterLabel>Локализация</FilterLabel>
+                  <Button type={domesticOnly ? 'primary' : 'default'} onClick={toggleDomesticOnly}>
+                    {domesticOnly ? 'Только отечественные товары' : 'Показать только отечественные'}
+                  </Button>
+                </FilterField>
+                <FilterField>
                   <FilterLabel>Точность поиска</FilterLabel>
                   <Button type={strictMatch ? 'primary' : 'default'} onClick={toggleStrictMatch}>
                     {strictMatch ? 'Строгое совпадение включено' : 'Переключить strict match'}
@@ -2594,6 +2858,24 @@ function Workspace({
                         actor,
                       })
                     }
+                    if (selectedOriginValue) {
+                      void createSearchEvent({
+                        session_id: currentSessionId,
+                        event_type: 'filter_removed',
+                        page_type: 'catalog',
+                        payload: { filter_name: 'origin_value', filter_value: selectedOriginValue },
+                        actor,
+                      })
+                    }
+                    if (domesticOnly) {
+                      void createSearchEvent({
+                        session_id: currentSessionId,
+                        event_type: 'filter_removed',
+                        page_type: 'catalog',
+                        payload: { filter_name: 'domestic_only', filter_value: true },
+                        actor,
+                      })
+                    }
                     if (strictMatch) {
                       void createSearchEvent({
                         session_id: currentSessionId,
@@ -2610,6 +2892,8 @@ function Workspace({
                       payload: {
                         category_id: selectedCategoryId || '',
                         supplier_id: selectedSupplierId || '',
+                        origin_value: selectedOriginValue || '',
+                        domestic_only: domesticOnly,
                         strict_match: strictMatch,
                       },
                       actor,
@@ -2617,6 +2901,8 @@ function Workspace({
                   }
                   setSelectedCategoryId('')
                   setSelectedSupplierId('')
+                  setSelectedOriginValue('')
+                  setDomesticOnly(false)
                   setStrictMatch(false)
                   setCatalogPage(1)
                 }}>
@@ -2870,7 +3156,7 @@ function Workspace({
           </Sidebar>
 
           <Content>
-            <SectionSurface>
+            <SectionSurface ref={catalogSectionRef}>
               <TabsRow>
                 {session.role === 'supplier' ? (
                   <TabButton $active={false} onClick={() => navigate('/supplier')}>
@@ -3011,7 +3297,7 @@ function Workspace({
                                 current={catalogPage}
                                 pageSize={CATALOG_PAGE_SIZE}
                                 total={searchState.response.items.length}
-                                onChange={(page) => setCatalogPage(page)}
+                                onChange={handleCatalogPageChange}
                                 showSizeChanger={false}
                               />
                             </div>
@@ -3054,7 +3340,7 @@ function Workspace({
                               current={catalogPage}
                               pageSize={CATALOG_PAGE_SIZE}
                               total={feedQuery.data.total}
-                              onChange={(page) => setCatalogPage(page)}
+                              onChange={handleCatalogPageChange}
                               showSizeChanger={false}
                             />
                           </div>
@@ -3270,7 +3556,7 @@ function Workspace({
                         current={effectiveFavoritesPage}
                         pageSize={FAVORITES_PAGE_SIZE}
                         total={activeCollectionItems.length}
-                        onChange={(page) => setFavoritesPage(page)}
+                        onChange={handleFavoritesPageChange}
                         showSizeChanger={false}
                       />
                     </div>
@@ -3379,13 +3665,24 @@ function Workspace({
                     Живая лента недавних поисковых и закупочных действий пользователя
                   </SectionHeadingHint>
                 </SectionHeadingStack>
-                <Select
-                  size="middle"
-                  value={activityFilter}
-                  style={{ minWidth: 180 }}
-                  onChange={(value) => setActivityFilter(value as ActivityFilter)}
-                  options={activityFilterOptions}
-                />
+                <ActivityControls>
+                  <Button
+                    danger
+                    ghost
+                    loading={clearHistoryMutation.isPending}
+                    disabled={!historyQuery.data?.items?.length && !activityQuery.data?.items?.length}
+                    onClick={() => clearHistoryMutation.mutate()}
+                  >
+                    Очистить историю
+                  </Button>
+                  <Select
+                    size="middle"
+                    value={activityFilter}
+                    style={{ minWidth: 180 }}
+                    onChange={(value) => setActivityFilter(value as ActivityFilter)}
+                    options={activityFilterOptions}
+                  />
+                </ActivityControls>
               </SectionHeaderBar>
               <div style={{ padding: 20, display: 'grid', gap: 16 }}>
                 {activityQuery.isLoading ? (
