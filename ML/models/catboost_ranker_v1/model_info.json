@@ -59,7 +59,10 @@
     "description_contains_query",
     "attribute_value_count",
     "title_len_chars",
-    "description_len_chars"
+    "description_len_chars",
+    "emb_user_centroid_sim",
+    "emb_query_item_sim",
+    "emb_max_recent_sim"
   ],
   "categorical_features": [
     "item_category_id",
@@ -128,6 +131,9 @@
     "attribute_value_count",
     "title_len_chars",
     "description_len_chars",
+    "emb_user_centroid_sim",
+    "emb_query_item_sim",
+    "emb_max_recent_sim",
     "item_category_id",
     "item_category_name",
     "item_supplier_id",

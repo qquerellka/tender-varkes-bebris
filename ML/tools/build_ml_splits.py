@@ -27,6 +27,13 @@ except ImportError:
         SessionRetrievalFeatures,
     )
 
+try:
+    from embedding_store import EmbeddingStore
+except ImportError:
+    from .embedding_store import EmbeddingStore  # type: ignore[no-redef]
+
+import numpy as np
+
 
 ISO_FRACTION_RE = re.compile(
     r"^(?P<prefix>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"
@@ -62,6 +69,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--test-ratio", type=float, default=0.1)
+    parser.add_argument(
+        "--embeddings-path",
+        type=Path,
+        default=None,
+        help="Path to precomputed item_embeddings.float32.npy",
+    )
+    parser.add_argument(
+        "--ste-csv-path",
+        type=Path,
+        default=None,
+        help="Path to STE CSV used to map embedding rows to item ids",
+    )
     return parser.parse_args()
 
 
@@ -136,6 +155,10 @@ def enrich_row(
     user_profile_by_user_id: dict[str, dict[str, str]],
     org_profile_by_org_id: dict[str, dict[str, str]],
     retrieval_features: SessionRetrievalFeatures | None = None,
+    emb_store: EmbeddingStore | None = None,
+    session_user_centroid: np.ndarray | None = None,
+    session_bm25_centroid: np.ndarray | None = None,
+    user_recent_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     item = item_by_id.get(row["ste_id"], {})
     category = category_by_id.get(item.get("category_id", ""), {})
@@ -222,6 +245,21 @@ def enrich_row(
         ),
         "strict_term_coverage": float(retrieval_row.get("strict_term_coverage", 0.0)),
         "fuzzy_edit_score": float(retrieval_row.get("fuzzy_edit_score", 0.0)),
+        "emb_user_centroid_sim": (
+            emb_store.cosine(session_user_centroid, emb_store.get(row["ste_id"]))
+            if emb_store and session_user_centroid is not None
+            else 0.0
+        ),
+        "emb_query_item_sim": (
+            emb_store.cosine(session_bm25_centroid, emb_store.get(row["ste_id"]))
+            if emb_store and session_bm25_centroid is not None
+            else 0.0
+        ),
+        "emb_max_recent_sim": (
+            emb_store.max_sim(user_recent_ids or [], row["ste_id"])
+            if emb_store and user_recent_ids
+            else 0.0
+        ),
     }
 
 
@@ -292,6 +330,59 @@ def main() -> None:
         progress_every=max(100, len(session_queries) // 20),
     )
 
+    emb_store: EmbeddingStore | None = None
+    if args.embeddings_path and args.embeddings_path.exists():
+        log_step(f"Loading embeddings from {args.embeddings_path}")
+        emb_store = EmbeddingStore(
+            embeddings_path=args.embeddings_path,
+            ste_csv_path=args.ste_csv_path,
+        )
+
+    session_user_centroids: dict[str, np.ndarray | None] = {}
+    session_bm25_centroids: dict[str, np.ndarray | None] = {}
+    session_user_recent: dict[str, list[str]] = {}
+    if emb_store is not None:
+        log_step("Computing per-session embedding centroids")
+        for session_id, _session_query in session_queries.items():
+            first_row = next(row for row in relevance_rows if row["session_id"] == session_id)
+            user_profile = user_profile_by_user_id.get(first_row["user_id"], {})
+            recent_ids_raw = user_profile.get("recent_ste_ids_json", "[]")
+            try:
+                recent_ids = (
+                    json.loads(recent_ids_raw)
+                    if isinstance(recent_ids_raw, str)
+                    else recent_ids_raw
+                )
+            except json.JSONDecodeError:
+                recent_ids = []
+            if not isinstance(recent_ids, list):
+                recent_ids = []
+
+            session_user_recent[session_id] = recent_ids
+            session_user_centroids[session_id] = (
+                emb_store.centroid(recent_ids)
+                if recent_ids
+                else None
+            )
+
+            retrieval_features = session_retrieval_features.get(session_id)
+            if retrieval_features is None:
+                session_bm25_centroids[session_id] = None
+                continue
+
+            bm25_items = [
+                (item_id, float(features.get("channel_score_bm25", 0.0)))
+                for item_id, features in retrieval_features.features_by_item_id.items()
+                if float(features.get("channel_score_bm25", 0.0)) > 0
+            ]
+            bm25_items.sort(key=lambda item: item[1], reverse=True)
+            top_bm25_ids = [item_id for item_id, _ in bm25_items[:10]]
+            session_bm25_centroids[session_id] = (
+                emb_store.centroid(top_bm25_ids)
+                if top_bm25_ids
+                else None
+            )
+
     log_step("Assigning sessions to train/val/test")
     session_split = build_session_split_map(relevance_rows, config=config)
 
@@ -308,6 +399,10 @@ def main() -> None:
                 user_profile_by_user_id=user_profile_by_user_id,
                 org_profile_by_org_id=org_profile_by_org_id,
                 retrieval_features=session_retrieval_features.get(row["session_id"]),
+                emb_store=emb_store,
+                session_user_centroid=session_user_centroids.get(row["session_id"]),
+                session_bm25_centroid=session_bm25_centroids.get(row["session_id"]),
+                user_recent_ids=session_user_recent.get(row["session_id"]),
             )
         )
         if index == 1 or index % 10000 == 0 or index == total_rows:

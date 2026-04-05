@@ -204,6 +204,12 @@ class HybridSearchIndex:
         self._semantic_char_vectorizer: Any | None = None
         self._semantic_svd: Any | None = None
         self._semantic_matrix = np.zeros((len(indexed_documents), 0), dtype=float)
+        if enable_semantic and settings.search_semantic_backend.strip().lower() != SEMANTIC_BACKEND_DISABLED:
+            self._build_semantic_index()
+        self._semantic_enabled = (
+            self._semantic_backend != SEMANTIC_BACKEND_DISABLED
+            and self._semantic_matrix.size > 0
+        )
         self._release_build_only_state()
 
         if progress:
@@ -222,7 +228,15 @@ class HybridSearchIndex:
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
-        self._disable_semantic_runtime_state()
+        self._semantic_faiss_index = None
+        if (
+            getattr(self, "_semantic_enabled", False)
+            and getattr(self, "_semantic_backend", SEMANTIC_BACKEND_DISABLED)
+            == SEMANTIC_BACKEND_BGE_M3
+        ):
+            self._semantic_faiss_index = build_faiss_index(
+                np.ascontiguousarray(self._semantic_matrix.astype(np.float32))
+            )
 
     def search(
         self,
@@ -692,6 +706,12 @@ class HybridSearchIndex:
 
         dense_embeddings = encode_bge_m3_texts(semantic_corpus)
         if dense_embeddings is None or dense_embeddings.size == 0:
+            LOGGER.info(
+                "Dense semantic index is unavailable for model '%s'; "
+                "falling back to %s",
+                settings.search_semantic_model_name,
+                SEMANTIC_BACKEND_FALLBACK,
+            )
             return False
 
         self._semantic_backend = SEMANTIC_BACKEND_BGE_M3

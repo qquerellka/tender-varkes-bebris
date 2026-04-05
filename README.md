@@ -13,16 +13,19 @@
 - synthetic dataset больше не используется для bootstrap и runtime
 - bootstrap идёт только через `portal_csv`
 - основной runtime-путь поиска теперь `DB-first`, а не полный in-memory индекс
-- semantic retrieval полностью отключён
+- semantic retrieval теперь включается через `SEARCH_SEMANTIC_BACKEND=auto` и используется в online shortlist/rerank
 
 Текущий локальный профиль по умолчанию:
 
 ```env
-RANKING_MODE=retrieval_only
-RANKING_PROVIDER=noop
+RANKING_MODE=ml_rerank
+RANKING_PROVIDER=local_ml
 SEARCH_RETRIEVAL_BACKEND=postgres
-SEARCH_SEMANTIC_BACKEND=disabled
-SEARCH_SEMANTIC_USE_FAISS=false
+SEARCH_SEMANTIC_BACKEND=auto
+SEARCH_SEMANTIC_USE_FAISS=true
+SEARCH_SEMANTIC_ALLOW_REMOTE_DOWNLOAD=true
+BACKEND_INSTALL_SEMANTIC=false
+ML_ITEM_EMBEDDINGS_PATH=/app/ML/data/orig/item_embeddings.float32.npy
 ```
 
 ## Структура
@@ -37,6 +40,12 @@ SEARCH_SEMANTIC_USE_FAISS=false
 ```bash
 cp .env.example .env
 docker compose up --build
+```
+
+Если нужен полный semantic stack c `FlagEmbedding`/`faiss`/`torch`, включи его явно:
+
+```bash
+BACKEND_INSTALL_SEMANTIC=true docker compose up --build backend
 ```
 
 Если backend-код менялся, запускай именно с `--build`: контейнер backend собирается в image и не монтирует `./backend` как live volume.
@@ -88,8 +97,8 @@ PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT=120
 Семантика выключена полностью:
 
 ```env
-SEARCH_SEMANTIC_BACKEND=disabled
-SEARCH_SEMANTIC_USE_FAISS=false
+SEARCH_SEMANTIC_BACKEND=auto
+SEARCH_SEMANTIC_USE_FAISS=true
 ```
 
 `SEARCH_INDEX_CACHE_PATH` остаётся в конфиге только для опционального `memory` backend. В дефолтном `postgres`-режиме startup не зависит от persisted hybrid index.
@@ -110,7 +119,7 @@ SEARCH_RETRIEVAL_BACKEND=memory
 
 ```bash
 python ML/tools/build_portal_dataset.py
-python ML/tools/build_ml_splits.py --source-dir ML/data/orig/derived --output-dir ML/data/orig/derived/splits
+python ML/tools/build_ml_splits.py --source-dir ML/data/orig/derived --output-dir ML/data/orig/derived/splits --embeddings-path ML/data/orig/item_embeddings.float32.npy --ste-csv-path ML/data/orig/РЎРўР•_20260403/РЎРўР•_20260403.csv
 python ML/tools/train_ranker.py --splits-dir ML/data/orig/derived/splits --artifacts-dir ML/models/catboost_ranker_v1
 ```
 
@@ -123,6 +132,6 @@ docker compose restart backend
 ## Что важно знать
 
 - `BOOTSTRAP_DATASET` по умолчанию теперь `portal_csv`
-- offline ML pipeline использует только `orig`-данные и не добавляет semantic feature columns
-- быстрый локальный режим сейчас ориентирован на `postgres + retrieval_only`
+- offline ML pipeline использует только `orig`-данные и добавляет `emb_*` признаки из precomputed item embeddings
+- быстрый локальный режим сейчас ориентирован на `postgres + ml_rerank`
 - если нужна диагностика search stack, смотри `GET /api/v1/debug/search-stack`

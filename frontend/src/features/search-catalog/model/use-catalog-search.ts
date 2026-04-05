@@ -30,6 +30,7 @@ import {
   type SearchResponse,
 } from '@shared/api/search'
 import { writeLastSearchSessionId } from '@shared/lib/portal-session'
+import { useDebouncedValue } from '@shared/lib/use-debounced-value'
 
 const STORAGE_KEYS = {
   activeUserId: 'catalog-demo-active-user-id',
@@ -41,6 +42,7 @@ const STORAGE_KEYS = {
 } as const
 
 const RESULTS_PER_PAGE = 8
+const SEARCH_SUGGESTIONS_DEBOUNCE_MS = 350
 
 function readStoredValue(key: string): string | null {
   if (typeof window === 'undefined') {
@@ -76,7 +78,11 @@ export function useCatalogSearch() {
   })
   const [contextNotice, setContextNotice] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
-  const deferredSearchValue = useDeferredValue(searchValue)
+  const deferredSearchValue = useDeferredValue(searchValue.trim())
+  const debouncedSuggestionsValue = useDebouncedValue(
+    deferredSearchValue,
+    SEARCH_SUGGESTIONS_DEBOUNCE_MS,
+  )
   const activeActor = useMemo(() => ({ userId: activeUserId }), [activeUserId])
   const activeUser = useMemo(
     () => demoUsers.find((user) => user.id === activeUserId) ?? demoUsers[0],
@@ -91,9 +97,10 @@ export function useCatalogSearch() {
   })
 
   const suggestionsQuery = useQuery({
-    queryKey: ['search-suggestions', activeUserId, deferredSearchValue.trim()],
-    queryFn: () => getSearchSuggestions(deferredSearchValue.trim(), activeActor),
-    enabled: deferredSearchValue.trim().length > 0,
+    queryKey: ['search-suggestions', activeUserId, debouncedSuggestionsValue],
+    queryFn: ({ signal }) => getSearchSuggestions(debouncedSuggestionsValue, activeActor, signal),
+    enabled: debouncedSuggestionsValue.length > 2,
+    retry: false,
   })
 
   const relatedQuery = useQuery({
@@ -133,8 +140,12 @@ export function useCatalogSearch() {
   const currentSessionId =
     searchState.kind === 'results' ? searchState.response.meta.session_id : undefined
 
-  const autocompleteOptions = buildAutocompleteOptions(suggestionsQuery.data?.items ?? [])
+  const suggestionsReady = searchValue.trim() === debouncedSuggestionsValue
+  const suggestionItems = suggestionsReady ? suggestionsQuery.data?.items ?? [] : []
+
+  const autocompleteOptions = buildAutocompleteOptions(suggestionItems)
   const suggestionsHint =
+    suggestionsReady &&
     suggestionsQuery.data?.meta.correction_type !== 'none' &&
     suggestionsQuery.data?.meta.corrected_query
       ? `Подсказки для: ${suggestionsQuery.data.meta.effective_query}`

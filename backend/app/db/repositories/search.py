@@ -97,7 +97,7 @@ class SynonymExpansion:
 
 
 class SearchRepository:
-    _INDEX_CACHE_FORMAT_VERSION = 2
+    _INDEX_CACHE_FORMAT_VERSION = 3
     _hybrid_index_lock = threading.Lock()
     _search_vocabulary_cache: set[str] | None = None
     _search_spell_vocabulary_cache: SpellVocabularyIndex | None = None
@@ -118,10 +118,13 @@ class SearchRepository:
     def warmup_search_backend(self) -> dict[str, Any]:
         if self._get_retrieval_backend() == POSTGRES_RETRIEVAL_BACKEND:
             document_count = self.session.scalar(select(func.count(STEItemModel.id))) or 0
+            semantic_backend = settings.search_semantic_backend.strip().lower()
             return {
                 "documents_count": int(document_count),
-                "semantic_backend": "disabled",
-                "semantic_faiss_enabled": False,
+                "semantic_backend": semantic_backend,
+                "semantic_faiss_enabled": bool(
+                    semantic_backend != "disabled" and settings.search_semantic_use_faiss
+                ),
             }
 
         index = self._get_hybrid_index()
@@ -174,6 +177,7 @@ class SearchRepository:
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
         semantic_query_texts: list[str] | None = None,
+        enable_semantic: bool = True,
         structured_query: SearchTextAnalysis | None = None,
         strict_match: bool = False,
         category_id: str | None = None,
@@ -188,6 +192,7 @@ class SearchRepository:
             fuzzy_query_terms=fuzzy_query_terms,
             synonym_query_terms=synonym_query_terms,
             semantic_query_texts=semantic_query_texts,
+            enable_semantic=enable_semantic,
             structured_query=structured_query,
             strict_match=strict_match,
             category_id=category_id,
@@ -227,6 +232,7 @@ class SearchRepository:
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
         semantic_query_texts: list[str] | None = None,
+        enable_semantic: bool = True,
         structured_query: SearchTextAnalysis | None = None,
         strict_match: bool = False,
         category_id: str | None = None,
@@ -242,6 +248,7 @@ class SearchRepository:
                 fuzzy_query_terms=fuzzy_query_terms,
                 synonym_query_terms=synonym_query_terms,
                 semantic_query_texts=semantic_query_texts,
+                enable_semantic=enable_semantic,
                 structured_query=structured_query,
                 strict_match=strict_match,
                 category_id=category_id,
@@ -257,6 +264,7 @@ class SearchRepository:
             fuzzy_query_terms=fuzzy_query_terms,
             synonym_query_terms=synonym_query_terms,
             semantic_query_texts=semantic_query_texts,
+            enable_semantic=enable_semantic,
             structured_query=structured_query,
             strict_match=strict_match,
             category_id=category_id,
@@ -273,6 +281,7 @@ class SearchRepository:
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
         semantic_query_texts: list[str] | None = None,
+        enable_semantic: bool = True,
         structured_query: SearchTextAnalysis | None = None,
         strict_match: bool = False,
         category_id: str | None = None,
@@ -284,11 +293,15 @@ class SearchRepository:
         morphology_terms = self._flatten_search_terms(morphology_query_terms or [])
         fuzzy_terms = self._flatten_search_terms(fuzzy_query_terms or [])
         synonym_terms = self._flatten_search_terms(synonym_query_terms or [])
-        semantic_texts = self._prepare_semantic_queries(
-            semantic_query_texts
-            or query_terms
-            or fuzzy_query_terms
-            or []
+        semantic_texts = (
+            self._prepare_semantic_queries(
+                semantic_query_texts
+                or query_terms
+                or fuzzy_query_terms
+                or []
+            )
+            if enable_semantic
+            else []
         )
 
         if (
@@ -341,6 +354,7 @@ class SearchRepository:
         fuzzy_query_terms: list[str] | None = None,
         synonym_query_terms: list[str] | None = None,
         semantic_query_texts: list[str] | None = None,
+        enable_semantic: bool = True,
         structured_query: SearchTextAnalysis | None = None,
         strict_match: bool = False,
         category_id: str | None = None,
@@ -352,12 +366,28 @@ class SearchRepository:
         morphology_terms = self._flatten_search_terms(morphology_query_terms or [])
         fuzzy_terms = self._flatten_search_terms(fuzzy_query_terms or [])
         synonym_terms = self._flatten_search_terms(synonym_query_terms or [])
+        semantic_enabled = (
+            enable_semantic
+            and settings.search_semantic_backend.strip().lower() != "disabled"
+        )
+        semantic_texts = (
+            self._prepare_semantic_queries(
+                semantic_query_texts
+                or query_text_variants
+                or query_terms
+                or fuzzy_query_terms
+                or []
+            )
+            if semantic_enabled
+            else []
+        )
 
         if (
             not lexical_terms
             and not morphology_terms
             and not fuzzy_terms
             and not synonym_terms
+            and not semantic_texts
             and structured_query is None
         ):
             return self._fallback_candidate_refs(
@@ -365,9 +395,10 @@ class SearchRepository:
                 supplier_id=supplier_id,
             )
 
+        semantic_shortlist_floor = max(limit, settings.search_semantic_shortlist_size)
         candidate_pool_limit = min(
             RETRIEVAL_MAX_CANDIDATE_POOL,
-            max(limit * 8, RETRIEVAL_MIN_CANDIDATE_POOL),
+            semantic_shortlist_floor if semantic_enabled else max(limit * 4, 60),
         )
         channel_results = self._build_postgres_channel_results(
             lexical_terms=lexical_terms,
@@ -381,7 +412,11 @@ class SearchRepository:
             allowed_document_ids=allowed_document_ids,
             limit=candidate_pool_limit,
         )
-        if settings.ranking_mode.strip().lower() == "retrieval_only" and not strict_match:
+        if (
+            settings.ranking_mode.strip().lower() == "retrieval_only"
+            and not strict_match
+            and not (semantic_enabled and semantic_texts)
+        ):
             return self._rrf_merge_postgres_refs(channel_results, limit=limit)
 
         shortlist_ids = self._extract_postgres_shortlist_ids(
@@ -397,7 +432,7 @@ class SearchRepository:
 
         shortlist_index = HybridSearchIndex(
             shortlist_documents,
-            enable_semantic=False,
+            enable_semantic=semantic_enabled,
             progress=False,
         )
         retrieval_results = shortlist_index.search(
@@ -405,7 +440,7 @@ class SearchRepository:
             morphology_terms=morphology_terms,
             synonym_terms=synonym_terms,
             trigram_terms=fuzzy_terms,
-            semantic_texts=[],
+            semantic_texts=semantic_texts,
             structured_query=structured_query,
             strict_match=strict_match,
             category_id=category_id,
@@ -1204,7 +1239,15 @@ class SearchRepository:
 
     @staticmethod
     def _prepare_semantic_queries(values: list[str]) -> list[str]:
-        return []
+        prepared: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized = normalize_query(value)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            prepared.append(normalized)
+        return prepared[:8]
 
     @classmethod
     def _extract_tokens(cls, value: str | None) -> set[str]:

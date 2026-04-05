@@ -80,6 +80,7 @@ import {
   writeLastSearchSessionId,
   writeStoredSession,
 } from '@shared/lib/portal-session'
+import { useDebouncedValue } from '@shared/lib/use-debounced-value'
 import PortalShell from '@widgets/portal-shell/PortalShell'
 
 const STORAGE_KEYS = {
@@ -92,6 +93,7 @@ const STORAGE_KEYS = {
 
 const CATALOG_PAGE_SIZE = 9
 const FAVORITES_PAGE_SIZE = 8
+const SEARCH_SUGGESTIONS_DEBOUNCE_MS = 350
 
 type WorkspaceTab = 'catalog' | 'favorites' | 'compare'
 type SortMode = 'relevance' | 'title_asc' | 'supplier_asc'
@@ -1450,7 +1452,11 @@ function Workspace({
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('catalog')
   const [catalogPage, setCatalogPage] = useState(1)
   const [favoritesPage, setFavoritesPage] = useState(1)
-  const deferredSearchValue = useDeferredValue(searchValue)
+  const deferredSearchValue = useDeferredValue(searchValue.trim())
+  const debouncedSuggestionsValue = useDebouncedValue(
+    deferredSearchValue,
+    SEARCH_SUGGESTIONS_DEBOUNCE_MS,
+  )
   const scrollDepthMarksRef = useRef<Set<number>>(new Set())
   const sessionInteractionRef = useRef<Record<string, boolean>>({})
   const compareViewedSessionsRef = useRef<Set<string>>(new Set())
@@ -1501,9 +1507,10 @@ function Workspace({
   })
 
   const suggestionsQuery = useQuery({
-    queryKey: ['search-suggestions', session.user_id, deferredSearchValue.trim()],
-    queryFn: () => getSearchSuggestions(deferredSearchValue.trim(), actor),
-    enabled: deferredSearchValue.trim().length > 1,
+    queryKey: ['search-suggestions', session.user_id, debouncedSuggestionsValue],
+    queryFn: ({ signal }) => getSearchSuggestions(debouncedSuggestionsValue, actor, signal),
+    enabled: debouncedSuggestionsValue.length > 2,
+    retry: false,
   })
 
   const historyQuery = useQuery({
@@ -1548,6 +1555,8 @@ function Workspace({
 
   const currentSessionId =
     searchState.kind === 'results' ? searchState.response.meta.session_id : null
+  const suggestionsReady = searchValue.trim() === debouncedSuggestionsValue
+  const suggestionItems = suggestionsReady ? suggestionsQuery.data?.items ?? [] : []
   const currentResultItems = useMemo(
     () => (searchState.kind === 'results' ? searchState.response.items : []),
     [searchState],
@@ -2294,14 +2303,12 @@ function Workspace({
 
             <SearchInputWrap>
               <SearchAutocomplete
-                options={buildAutocompleteOptions(suggestionsQuery.data?.items ?? [])}
+                options={buildAutocompleteOptions(suggestionItems)}
                 value={searchValue}
                 onChange={(value) => setSearchValue(String(value))}
                 onSelect={(value) => {
                   const selectedValue = String(value)
-                  const matchedSuggestion = suggestionsQuery.data?.items.find(
-                    (item) => item.label === selectedValue,
-                  )
+                  const matchedSuggestion = suggestionItems.find((item) => item.label === selectedValue)
                   setSearchValue(selectedValue)
                   void runSearch(
                     selectedValue,

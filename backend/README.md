@@ -14,11 +14,14 @@ Backend работает без synthetic bootstrap:
 Для локальной отладки backend сейчас рассчитан на retrieval-first конфигурацию:
 
 ```env
-RANKING_MODE=retrieval_only
-RANKING_PROVIDER=noop
+RANKING_MODE=ml_rerank
+RANKING_PROVIDER=local_ml
 SEARCH_RETRIEVAL_BACKEND=postgres
-SEARCH_SEMANTIC_BACKEND=disabled
-SEARCH_SEMANTIC_USE_FAISS=false
+SEARCH_SEMANTIC_BACKEND=auto
+SEARCH_SEMANTIC_USE_FAISS=true
+SEARCH_SEMANTIC_ALLOW_REMOTE_DOWNLOAD=true
+BACKEND_INSTALL_SEMANTIC=false
+ML_ITEM_EMBEDDINGS_PATH=/app/ML/data/orig/item_embeddings.float32.npy
 ```
 
 Что это даёт:
@@ -131,8 +134,8 @@ PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT=120
 
 Сейчас основные рычаги скорости такие:
 - держать `SEARCH_RETRIEVAL_BACKEND=postgres`
-- для локального режима оставлять `RANKING_MODE=retrieval_only`
-- не включать semantic retrieval
+- для локального режима держать `RANKING_MODE=ml_rerank`
+- держать semantic retrieval включённым, если нужен online rerank с semantic features
 - следить, чтобы были применены миграции с `pg_trgm` и hybrid search indexes
 
 Для текущего алгоритма важно понимать:

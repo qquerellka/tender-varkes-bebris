@@ -24,9 +24,48 @@ def _resolve_portal_path(configured_path: str) -> Path:
     return (backend_dir / path).resolve()
 
 
+def _portal_data_dir() -> Path:
+    backend_dir = Path(__file__).resolve().parents[1]
+    return (backend_dir / "../ML/data/orig").resolve()
+
+
+def _discover_portal_csv_path(*prefixes: str) -> Path | None:
+    data_dir = _portal_data_dir()
+    if not data_dir.exists():
+        return None
+
+    candidates: set[Path] = set()
+    for prefix in prefixes:
+        candidates.update(data_dir.glob(f"{prefix}_*/*.csv"))
+        candidates.update(data_dir.rglob(f"{prefix}*.csv"))
+
+    return next(iter(sorted(path.resolve() for path in candidates if path.exists())), None)
+
+
+def _resolve_portal_csv_path(configured_path: str, *prefixes: str) -> Path:
+    resolved = _resolve_portal_path(configured_path)
+    if resolved.exists():
+        return resolved
+
+    discovered = _discover_portal_csv_path(*prefixes)
+    if discovered is not None:
+        print(
+            "[bootstrap] Using discovered portal CSV because configured path is unavailable: "
+            f"{resolved} -> {discovered}",
+            flush=True,
+        )
+        return discovered
+
+    return resolved
+
+
 def _bootstrap_portal_csv_data() -> bool:
-    ste_csv_path = _resolve_portal_path(settings.portal_ste_csv_path)
-    contracts_csv_path = _resolve_portal_path(settings.portal_contracts_csv_path)
+    ste_csv_path = _resolve_portal_csv_path(settings.portal_ste_csv_path, "СТЕ", "STE")
+    contracts_csv_path = _resolve_portal_csv_path(
+        settings.portal_contracts_csv_path,
+        "Контракты",
+        "Contracts",
+    )
     if not ste_csv_path.exists() or not contracts_csv_path.exists():
         return False
 
@@ -116,8 +155,8 @@ def bootstrap() -> None:
         return
     raise FileNotFoundError(
         "Portal CSV bootstrap failed. "
-        f"STE: {_resolve_portal_path(settings.portal_ste_csv_path)} | "
-        f"Contracts: {_resolve_portal_path(settings.portal_contracts_csv_path)}"
+        f"STE: {_resolve_portal_csv_path(settings.portal_ste_csv_path, 'СТЕ', 'STE')} | "
+        f"Contracts: {_resolve_portal_csv_path(settings.portal_contracts_csv_path, 'Контракты', 'Contracts')}"
     )
 
 

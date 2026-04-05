@@ -629,7 +629,18 @@ class SearchService:
         *values: str,
         extra_values: list[str] | None = None,
     ) -> list[str]:
-        return []
+        candidates = [*values, *(extra_values or [])]
+        prepared: list[str] = []
+        seen: set[str] = set()
+
+        for value in candidates:
+            normalized = normalize_query(value)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            prepared.append(normalized)
+
+        return prepared[:8]
 
     @staticmethod
     def _build_morphology_terms(*term_groups: list[str]) -> list[str]:
@@ -911,9 +922,11 @@ class SearchService:
                 morphology_query_terms=query_context["morphology_query_terms"],
                 fuzzy_query_terms=query_context["fuzzy_search_terms"],
                 synonym_query_terms=query_context["synonym_query_terms"],
-                semantic_query_texts=query_context["semantic_query_texts"],
+                semantic_query_texts=[],
+                enable_semantic=False,
                 structured_query=structured_query,
                 strict_match=False,
+                limit=5,
             )
             suggestions.extend(
                 [

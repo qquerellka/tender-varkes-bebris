@@ -432,10 +432,12 @@ export async function getSearchActivity(
 export async function getSearchSuggestions(
   query: string,
   actor: ActorContext,
+  signal?: AbortSignal,
 ): Promise<SearchSuggestionsResponse> {
   const { data } = await api.get<SearchSuggestionsResponse>('/api/v1/search/suggestions', {
     ...buildActorConfig(actor),
     params: { query },
+    signal,
   })
   return data
 }

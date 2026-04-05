@@ -105,11 +105,24 @@ def _load_bge_m3_model(
         )
         return None
 
+    resolved_model_name = _resolve_local_model_reference(model_name)
+
     try:  # pragma: no cover - depends on optional runtime model availability
-        return BGEM3FlagModel(model_name, use_fp16=use_fp16)
+        model = BGEM3FlagModel(resolved_model_name, use_fp16=use_fp16)
     except Exception as exc:  # pragma: no cover - depends on optional runtime model availability
-        LOGGER.warning("Failed to initialize BGE-M3 model '%s': %s", model_name, exc)
+        LOGGER.warning(
+            "Failed to initialize BGE-M3 model '%s' (resolved=%s): %s",
+            model_name,
+            resolved_model_name,
+            exc,
+        )
         return None
+    LOGGER.info(
+        "Initialized BGE-M3 model '%s' from %s",
+        model_name,
+        resolved_model_name,
+    )
+    return model
 
 
 def _normalize_embeddings(values: Any) -> np.ndarray | None:
@@ -136,22 +149,46 @@ def _l2_normalize(matrix: np.ndarray) -> np.ndarray:
 
 
 def _is_model_cached_locally(model_name: str) -> bool:
+    if _resolve_cached_model_snapshot_path(model_name) is not None:
+        return True
+
     model_path = Path(model_name).expanduser()
     if model_path.exists():
         return True
 
+    return False
+
+
+def _resolve_local_model_reference(model_name: str) -> str:
+    model_path = Path(model_name).expanduser()
+    if model_path.exists():
+        return str(model_path)
+
+    snapshot_path = _resolve_cached_model_snapshot_path(model_name)
+    if snapshot_path is not None:
+        return str(snapshot_path)
+
+    return model_name
+
+
+def _resolve_cached_model_snapshot_path(model_name: str) -> Path | None:
     snapshot_root_name = f"models--{model_name.replace('/', '--')}"
     for cache_root in _iter_huggingface_cache_roots():
         snapshots_dir = cache_root / snapshot_root_name / "snapshots"
         if not snapshots_dir.is_dir():
             continue
         try:
-            if any(child.is_dir() for child in snapshots_dir.iterdir()):
-                return True
+            snapshots = sorted(
+                child
+                for child in snapshots_dir.iterdir()
+                if child.is_dir()
+            )
+            if snapshots:
+                return snapshots[-1]
         except OSError:
             continue
 
-    return False
+    return None
 
 
 def _iter_huggingface_cache_roots() -> tuple[Path, ...]:

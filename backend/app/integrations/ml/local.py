@@ -9,9 +9,11 @@ from typing import Any
 from app.domain.search.normalizer import extract_query_terms, normalize_query
 from app.domain.search.schemas import CandidateItem
 from app.integrations.ml.base import RankingProvider, RankingRequest
+from app.integrations.ml.embedding_store import EmbeddingStore
 
 logger = logging.getLogger(__name__)
 CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+DIGIT_RE = re.compile(r"\d")
 
 DEFAULT_NUMERIC_FEATURES = [
     "query_len",
@@ -39,6 +41,7 @@ RETRIEVAL_REASON_FEATURES = [
     "retrieval_morphology",
     "retrieval_fuzzy",
     "retrieval_synonym",
+    "retrieval_semantic",
     "retrieval_rrf",
 ]
 
@@ -62,8 +65,15 @@ BASELINE_REASON_FEATURES = [
 class LocalMlRankingProvider(RankingProvider):
     """Local in-process ML reranker supporting CatBoost and legacy linear artifacts."""
 
-    def __init__(self, artifacts_dir: str) -> None:
-        self.artifacts_dir = Path(artifacts_dir).expanduser().resolve()
+    def __init__(
+        self,
+        artifacts_dir: str,
+        embeddings_path: str | None = None,
+        ste_csv_path: str | None = None,
+    ) -> None:
+        self.artifacts_dir = self._resolve_path(artifacts_dir)
+        self.embeddings_path = self._resolve_optional_path(embeddings_path)
+        self.ste_csv_path = self._resolve_optional_path(ste_csv_path)
         self.model: Any | None = None
         self.vectorizer: Any | None = None
         self.model_type: str = "none"
@@ -78,10 +88,85 @@ class LocalMlRankingProvider(RankingProvider):
         self._csr_matrix: Any | None = None
         self._hstack: Any | None = None
         self._catboost_pool_cls: Any | None = None
+        self.embedding_store: EmbeddingStore | None = None
         self.ready = False
         self.supports_cyrillic = True
 
         self._load_artifacts()
+        self._load_embedding_store()
+
+    @classmethod
+    def _resolve_path(cls, configured_path: str) -> Path:
+        path = Path(configured_path).expanduser()
+        if path.is_absolute():
+            return path.resolve()
+
+        backend_dir = Path(__file__).resolve().parents[3]
+        return (backend_dir / path).resolve()
+
+    @classmethod
+    def _resolve_optional_path(cls, configured_path: str | None) -> Path | None:
+        if not configured_path:
+            return None
+        return cls._resolve_path(configured_path)
+
+    def _default_embedding_paths(self) -> list[Path]:
+        data_dir = self._ml_data_dir()
+        return [
+            data_dir / "item_embeddings.float32.npy",
+            data_dir / "item_embeddings-Copy1.float32.npy",
+        ]
+
+    def _ml_data_dir(self) -> Path:
+        return self.artifacts_dir.parents[1] / "data" / "orig"
+
+    def _default_ste_csv_paths(self) -> list[Path]:
+        data_dir = self._ml_data_dir()
+        if not data_dir.exists():
+            return []
+
+        candidates: set[Path] = set()
+        for prefix in ("СТЕ", "STE"):
+            candidates.update(data_dir.glob(f"{prefix}_*/*.csv"))
+            candidates.update(data_dir.rglob(f"{prefix}*.csv"))
+        return sorted(path.resolve() for path in candidates if path.exists())
+
+    def _resolve_ste_csv_path(self) -> Path | None:
+        if self.ste_csv_path is not None and self.ste_csv_path.exists():
+            return self.ste_csv_path
+
+        fallback = next(iter(self._default_ste_csv_paths()), None)
+        if fallback is not None and self.ste_csv_path is not None:
+            logger.info(
+                "Embedding store: using discovered STE CSV %s because configured path is unavailable: %s",
+                fallback,
+                self.ste_csv_path,
+            )
+        return fallback
+
+    def _load_embedding_store(self) -> None:
+        if self._np is None:
+            return
+
+        candidate_paths: list[Path] = []
+        if self.embeddings_path is not None:
+            candidate_paths.append(self.embeddings_path)
+        candidate_paths.extend(self._default_embedding_paths())
+
+        embeddings_path = next((path for path in candidate_paths if path.exists()), None)
+        if embeddings_path is None:
+            logger.info("Embedding store disabled: embeddings file was not found")
+            return
+
+        ste_csv_path = self._resolve_ste_csv_path()
+        try:
+            self.embedding_store = EmbeddingStore(
+                embeddings_path=embeddings_path,
+                ste_csv_path=ste_csv_path,
+            )
+        except Exception as exc:
+            logger.warning("Embedding store disabled: failed to load embeddings (%s)", exc)
+            self.embedding_store = None
 
     def _load_artifacts(self) -> None:
         try:
@@ -236,44 +321,37 @@ class LocalMlRankingProvider(RankingProvider):
         return float(len(candidate.attributes))
 
     @staticmethod
-    def _is_semantic_feature(feature_name: str) -> bool:
-        return feature_name in {
-            "retrieval_semantic",
-            "channel_score_semantic",
-            "channel_rank_semantic",
-            "semantic_backend_bge_m3",
-            "semantic_backend_fallback",
-            "semantic_via_faiss",
-        }
-
-    @classmethod
-    def _filtered_retrieval_features(
-        cls,
-        features: dict[str, float],
-    ) -> dict[str, float]:
-        return {
-            name: value
-            for name, value in features.items()
-            if not cls._is_semantic_feature(name)
-        }
-
-    @staticmethod
-    def _filtered_channel_values(
+    def _channel_values(
         values: dict[str, float | int],
     ) -> dict[str, float | int]:
-        return {
-            name: value
-            for name, value in values.items()
-            if name != "semantic"
-        }
+        return dict(values)
 
     @staticmethod
-    def _filtered_retrieval_reasons(reasons: list[str]) -> set[str]:
-        return {
-            reason
-            for reason in reasons
-            if reason != "retrieval_semantic"
-        }
+    def _retrieval_reasons(reasons: list[str]) -> set[str]:
+        return set(reasons)
+
+    @staticmethod
+    def _recent_item_ids(request: RankingRequest) -> list[str]:
+        return [
+            value
+            for value in dict.fromkeys(str(item).strip() for item in request.profile.recent_ste_ids)
+            if value
+        ]
+
+    @staticmethod
+    def _top_channel_item_ids(
+        candidates: list[CandidateItem],
+        *,
+        channel: str,
+        limit: int,
+    ) -> list[str]:
+        scored: list[tuple[str, float]] = []
+        for candidate in candidates:
+            score = float(candidate.retrieval_channel_scores.get(channel, 0.0))
+            if score > 0:
+                scored.append((candidate.id, score))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return [candidate_id for candidate_id, _ in scored[:limit]]
 
     def _build_feature_payloads(
         self,
@@ -288,6 +366,7 @@ class LocalMlRankingProvider(RankingProvider):
         popular_queries = self._normalize_values(request.profile.popular_queries)
         recent_ste_ids = set(request.profile.recent_ste_ids)
         popular_ste_ids = set(request.profile.popular_ste_ids)
+        recent_item_ids = self._recent_item_ids(request)
 
         original_query = (request.query.original or "").strip()
         normalized_query = (request.query.normalized or "").strip()
@@ -297,6 +376,23 @@ class LocalMlRankingProvider(RankingProvider):
         normalized_query_value = normalize_query(normalized_query)
         normalized_effective_query = normalize_query(effective_query)
         query_tokens = extract_query_terms(normalized_effective_query)
+        query_has_digits = float(bool(DIGIT_RE.search(normalized_query_value)))
+
+        user_centroid = (
+            self.embedding_store.centroid(recent_item_ids)
+            if self.embedding_store is not None and recent_item_ids
+            else None
+        )
+        bm25_proxy_item_ids = self._top_channel_item_ids(
+            request.candidates,
+            channel="bm25",
+            limit=10,
+        )
+        query_proxy_centroid = (
+            self.embedding_store.centroid(bm25_proxy_item_ids)
+            if self.embedding_store is not None and bm25_proxy_item_ids
+            else None
+        )
 
         for position, candidate in enumerate(request.candidates, start=1):
             candidate_title = normalize_query(candidate.title)
@@ -306,17 +402,20 @@ class LocalMlRankingProvider(RankingProvider):
             candidate_attributes_text = self._resolve_attributes_text(candidate)
             candidate_attributes = normalize_query(candidate_attributes_text)
 
-            retrieval_reasons = self._filtered_retrieval_reasons(candidate.retrieval_reasons)
-            retrieval_channel_scores = self._filtered_channel_values(
+            retrieval_reasons = self._retrieval_reasons(candidate.retrieval_reasons)
+            retrieval_channel_scores = self._channel_values(
                 dict(candidate.retrieval_channel_scores)
             )
-            retrieval_channel_ranks = self._filtered_channel_values(
+            retrieval_channel_ranks = self._channel_values(
                 dict(candidate.retrieval_channel_ranks)
             )
-            retrieval_features = self._filtered_retrieval_features(
-                dict(candidate.retrieval_features)
-            )
+            retrieval_features = dict(candidate.retrieval_features)
             baseline_reasons = set(candidate.reasons)
+            candidate_embedding = (
+                self.embedding_store.get(candidate.id)
+                if self.embedding_store is not None
+                else None
+            )
 
             title_overlap = self._token_overlap_count(query_tokens, candidate_title)
             description_overlap = self._token_overlap_count(query_tokens, candidate_description)
@@ -331,10 +430,12 @@ class LocalMlRankingProvider(RankingProvider):
                 "cat_match_org": float(candidate_category in org_top_categories),
                 "supplier_match_user": float(candidate_supplier in top_suppliers),
                 "is_recent_ste": float(candidate.id in recent_ste_ids),
+                "is_popular_ste_org": float(candidate.id in popular_ste_ids),
                 "query_in_history": float(
                     normalized_query_value in popular_queries
                     or normalized_original_query in popular_queries
                 ),
+                "query_has_digits": query_has_digits,
                 "baseline_score": float(candidate.baseline_score or candidate.score),
                 "retrieval_score": float(candidate.retrieval_score),
                 "retrieval_channel_count": float(len(retrieval_channel_scores or retrieval_reasons)),
@@ -369,6 +470,21 @@ class LocalMlRankingProvider(RankingProvider):
                 "attribute_value_count": self._resolve_attribute_value_count(candidate),
                 "title_len_chars": float(len(candidate.title)),
                 "description_len_chars": float(len(candidate.description)),
+                "emb_user_centroid_sim": (
+                    self.embedding_store.cosine(user_centroid, candidate_embedding)
+                    if self.embedding_store is not None
+                    else 0.0
+                ),
+                "emb_query_item_sim": (
+                    self.embedding_store.cosine(query_proxy_centroid, candidate_embedding)
+                    if self.embedding_store is not None
+                    else 0.0
+                ),
+                "emb_max_recent_sim": (
+                    self.embedding_store.max_sim(recent_item_ids, candidate.id)
+                    if self.embedding_store is not None and recent_item_ids
+                    else 0.0
+                ),
                 "item_category_id": candidate.category_id,
                 "item_category_name": candidate.category,
                 "item_supplier_id": candidate.supplier_id,

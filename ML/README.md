@@ -23,7 +23,7 @@
 ## Важные ограничения
 
 - synthetic dataset больше не используется
-- semantic feature columns исключены из ML splits, training и local ML provider
+- semantic retrieval features по-прежнему можно держать выключенными, но `emb_*` признаки из precomputed item embeddings теперь поддерживаются в splits, training и local ML provider
 - ML reranker работает только как перестановка уже найденных кандидатов
 
 ## Что изменилось в pipeline
@@ -40,7 +40,7 @@
 
 ```bash
 python ML/tools/build_portal_dataset.py
-python ML/tools/build_ml_splits.py --source-dir ML/data/orig/derived --output-dir ML/data/orig/derived/splits
+python ML/tools/build_ml_splits.py --source-dir ML/data/orig/derived --output-dir ML/data/orig/derived/splits --embeddings-path ML/data/orig/item_embeddings.float32.npy --ste-csv-path ML/data/orig/РЎРўР•_20260403/РЎРўР•_20260403.csv
 python ML/tools/train_ranker.py --splits-dir ML/data/orig/derived/splits --artifacts-dir ML/models/catboost_ranker_v1
 ```
 

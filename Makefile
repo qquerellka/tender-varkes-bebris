@@ -1,4 +1,4 @@
-.PHONY: up down restart logs ps build backend-logs frontend-logs
+.PHONY: up down restart logs ps build backend-logs frontend-logs semantic-up semantic-restart semantic-logs
 
 up:
 	docker compose up --build
@@ -24,3 +24,12 @@ backend-logs:
 
 frontend-logs:
 	docker compose logs -f frontend
+
+semantic-up:
+	docker compose up -d --build backend frontend
+
+semantic-restart:
+	docker compose up -d --force-recreate backend frontend
+
+semantic-logs:
+	docker compose logs -f backend frontend

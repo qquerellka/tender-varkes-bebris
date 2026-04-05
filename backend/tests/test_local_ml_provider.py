@@ -9,8 +9,26 @@ from app.integrations.ml.base import RankingQueryContext, RankingRequest
 from app.integrations.ml.local import LocalMlRankingProvider
 
 
+QUERY_TEXT = "\u043e\u0444\u0438\u0441\u043d\u0430\u044f \u0431\u0443\u043c\u0430\u0433\u0430 80"
+QUERY_SYNONYM = "\u0431\u0443\u043c\u0430\u0433\u0430 \u0434\u043b\u044f \u043f\u0435\u0447\u0430\u0442\u0438"
+CATEGORY_NAME = "\u041e\u0444\u0438\u0441"
+SUPPLIER_ONE = "\u041f\u043e\u0441\u0442\u0430\u0432\u0449\u0438\u043a 1"
+SUPPLIER_TWO = "\u041f\u043e\u0441\u0442\u0430\u0432\u0449\u0438\u043a 2"
+TITLE_ONE = "\u041e\u0444\u0438\u0441\u043d\u0430\u044f \u0431\u0443\u043c\u0430\u0433\u0430 \u041080"
+TITLE_TWO = "\u041d\u0430\u0431\u043e\u0440 \u043a\u0430\u043d\u0446\u0435\u043b\u044f\u0440\u0438\u0438"
+DESCRIPTION_ONE = "\u0411\u0443\u043c\u0430\u0433\u0430 \u0434\u043b\u044f \u043f\u0435\u0447\u0430\u0442\u0438"
+DESCRIPTION_TWO = (
+    "\u041a\u0430\u043d\u0446\u0442\u043e\u0432\u0430\u0440\u044b "
+    "\u0434\u043b\u044f \u043e\u0444\u0438\u0441\u0430"
+)
+KIT_VALUE = "\u043a\u0430\u043d\u0446\u0442\u043e\u0432\u0430\u0440\u044b"
+
+
 class StubVectorizer:
-    vocabulary_ = {"офис": 0, "бумага": 1}
+    vocabulary_ = {
+        "\u043e\u0444\u0438\u0441": 0,
+        "\u0431\u0443\u043c\u0430\u0433\u0430": 1,
+    }
 
     def transform(self, texts: list[str]) -> csr_matrix:
         rows = []
@@ -18,8 +36,8 @@ class StubVectorizer:
             lowered = text.lower()
             rows.append(
                 [
-                    1.0 if "бумага" in lowered else 0.0,
-                    1.0 if "канц" in lowered else 0.0,
+                    1.0 if "\u0431\u0443\u043c\u0430\u0433\u0430" in lowered else 0.0,
+                    1.0 if "\u043a\u0430\u043d\u0446" in lowered else 0.0,
                 ]
             )
         return csr_matrix(rows, dtype=float)
@@ -56,6 +74,39 @@ class StubPool:
         self.feature_names = feature_names
 
 
+class StubEmbeddingStore:
+    vectors = {
+        "ste_1": np.asarray([1.0, 0.0], dtype=np.float32),
+        "ste_2": np.asarray([0.0, 1.0], dtype=np.float32),
+    }
+
+    def get(self, ste_id: str) -> np.ndarray | None:
+        return self.vectors.get(ste_id)
+
+    def centroid(self, ste_ids: list[str]) -> np.ndarray | None:
+        rows = [self.vectors[ste_id] for ste_id in ste_ids if ste_id in self.vectors]
+        if not rows:
+            return None
+        centroid = np.mean(rows, axis=0, dtype=np.float32)
+        norm = float(np.linalg.norm(centroid))
+        return centroid if norm == 0 else centroid / norm
+
+    @staticmethod
+    def cosine(a: np.ndarray | None, b: np.ndarray | None) -> float:
+        if a is None or b is None:
+            return 0.0
+        return float(np.dot(a, b))
+
+    def max_sim(self, anchor_ids: list[str], candidate_id: str) -> float:
+        candidate = self.get(candidate_id)
+        if candidate is None:
+            return 0.0
+        return max(
+            (self.cosine(self.get(anchor_id), candidate) for anchor_id in anchor_ids),
+            default=0.0,
+        )
+
+
 class LocalMlRankingProviderTests(unittest.TestCase):
     def _make_provider(self) -> LocalMlRankingProvider:
         provider = LocalMlRankingProvider(artifacts_dir=".")
@@ -66,43 +117,48 @@ class LocalMlRankingProviderTests(unittest.TestCase):
         provider.model = StubModel([0.1, 0.9])
         provider.numeric_features = [
             "query_len",
+            "query_has_digits",
+            "is_popular_ste_org",
             "retrieval_score",
             "retrieval_bm25",
-            "title_partial_match",
             "query_has_synonyms",
+            "emb_user_centroid_sim",
+            "emb_query_item_sim",
+            "emb_max_recent_sim",
         ]
         provider._np = np
         provider._csr_matrix = csr_matrix
         provider._hstack = hstack
+        provider.embedding_store = StubEmbeddingStore()
         return provider
 
     @staticmethod
     def _make_request() -> RankingRequest:
         return RankingRequest(
             query=RankingQueryContext(
-                original="офисная бумага",
-                normalized="офисная бумага",
+                original=QUERY_TEXT,
+                normalized=QUERY_TEXT,
                 corrected=None,
-                applied_synonyms=["бумага для печати"],
+                applied_synonyms=[QUERY_SYNONYM],
             ),
             actor=CurrentActor(user_id="user_1", organization_id="org_1"),
             profile=SearchProfileRead(
                 user_id="user_1",
                 organization_id="org_1",
-                top_categories=["Офис"],
-                org_top_categories=["Офис"],
+                top_categories=[CATEGORY_NAME],
+                org_top_categories=[CATEGORY_NAME],
                 recent_ste_ids=["ste_1"],
-                top_suppliers=["Поставщик 1"],
+                top_suppliers=[SUPPLIER_ONE],
                 popular_ste_ids=["ste_2"],
-                popular_queries=["офисная бумага"],
+                popular_queries=[QUERY_TEXT],
             ),
             candidates=[
                 CandidateItem(
                     id="ste_1",
-                    title="Офисная бумага А4",
-                    category="Офис",
-                    supplier="Поставщик 1",
-                    description="Бумага для печати",
+                    title=TITLE_ONE,
+                    category=CATEGORY_NAME,
+                    supplier=SUPPLIER_ONE,
+                    description=DESCRIPTION_ONE,
                     score=0.92,
                     reasons=["partial_title_match", "token_match"],
                     category_id="cat_office",
@@ -112,22 +168,24 @@ class LocalMlRankingProviderTests(unittest.TestCase):
                     baseline_score=0.92,
                     retrieval_score=0.9,
                     retrieval_reasons=["retrieval_bm25", "retrieval_semantic"],
+                    retrieval_channel_scores={"bm25": 0.9},
                 ),
                 CandidateItem(
                     id="ste_2",
-                    title="Набор канцелярии",
-                    category="Офис",
-                    supplier="Поставщик 2",
-                    description="Канцтовары для офиса",
+                    title=TITLE_TWO,
+                    category=CATEGORY_NAME,
+                    supplier=SUPPLIER_TWO,
+                    description=DESCRIPTION_TWO,
                     score=0.41,
                     reasons=["token_match"],
                     category_id="cat_office",
                     supplier_id="sup_2",
                     status="active",
-                    attributes={"kit": "канцтовары"},
+                    attributes={"kit": KIT_VALUE},
                     baseline_score=0.41,
                     retrieval_score=0.35,
                     retrieval_reasons=["retrieval_fuzzy"],
+                    retrieval_channel_scores={"fuzzy": 0.35},
                 ),
             ],
         )
@@ -142,8 +200,14 @@ class LocalMlRankingProviderTests(unittest.TestCase):
         self.assertIn("cat_office", text_inputs[0])
         self.assertIn("sup_1", text_inputs[0])
         self.assertIn("A4", text_inputs[0])
-        self.assertEqual(numeric_rows[0], [2.0, 0.9, 1.0, 1.0, 1.0])
-        self.assertEqual(numeric_rows[1], [2.0, 0.35, 0.0, 0.0, 1.0])
+        self.assertEqual(
+            numeric_rows[0],
+            [3.0, 1.0, 0.0, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0],
+        )
+        self.assertEqual(
+            numeric_rows[1],
+            [3.0, 1.0, 1.0, 0.35, 0.0, 1.0, 0.0, 0.0, 0.0],
+        )
 
     def test_rank_blends_model_with_baseline_and_marks_results(self) -> None:
         provider = self._make_provider()

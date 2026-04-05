@@ -30,10 +30,11 @@ services:
       APP_NAME: ${APP_NAME:-Tender Search Backend}
       APP_VERSION: ${APP_VERSION:-0.1.0}
       API_PREFIX: ${API_PREFIX:-/api/v1}
-      RANKING_MODE: ${RANKING_MODE:-retrieval_only}
-      RANKING_PROVIDER: ${RANKING_PROVIDER:-noop}
+      RANKING_MODE: ${RANKING_MODE:-ml_rerank}
+      RANKING_PROVIDER: ${RANKING_PROVIDER:-local_ml}
       SEARCH_RETRIEVAL_BACKEND: ${SEARCH_RETRIEVAL_BACKEND:-postgres}
       ML_ARTIFACTS_DIR: ${ML_ARTIFACTS_DIR:-/app/ML/models/catboost_ranker_v1}
+      ML_ITEM_EMBEDDINGS_PATH: ${ML_ITEM_EMBEDDINGS_PATH:-/app/ML/data/orig/item_embeddings.float32.npy}
       BOOTSTRAP_DATASET: ${BOOTSTRAP_DATASET:-portal_csv}
       PORTAL_STE_CSV_PATH: ${PORTAL_STE_CSV_PATH:-/app/ML/data/orig/СТЕ_20260403/СТЕ_20260403.csv}
       PORTAL_CONTRACTS_CSV_PATH: ${PORTAL_CONTRACTS_CSV_PATH:-/app/ML/data/orig/Контракты_20260403/Контракты_20260403.csv}
@@ -41,8 +42,10 @@ services:
       PORTAL_IMPORT_STE_LIMIT: ${PORTAL_IMPORT_STE_LIMIT:-10000}
       PORTAL_IMPORT_CONTRACT_LIMIT: ${PORTAL_IMPORT_CONTRACT_LIMIT:-10000}
       PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT: ${PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT:-120}
-      SEARCH_SEMANTIC_BACKEND: ${SEARCH_SEMANTIC_BACKEND:-disabled}
-      SEARCH_SEMANTIC_USE_FAISS: ${SEARCH_SEMANTIC_USE_FAISS:-false}
+      SEARCH_SEMANTIC_BACKEND: ${SEARCH_SEMANTIC_BACKEND:-auto}
+      SEARCH_SEMANTIC_MODEL_NAME: ${SEARCH_SEMANTIC_MODEL_NAME:-BAAI/bge-m3}
+      SEARCH_SEMANTIC_USE_FAISS: ${SEARCH_SEMANTIC_USE_FAISS:-true}
+      SEARCH_SEMANTIC_SHORTLIST_SIZE: ${SEARCH_SEMANTIC_SHORTLIST_SIZE:-80}
       SEARCH_LEMMATIZER_CACHE_SIZE: ${SEARCH_LEMMATIZER_CACHE_SIZE:-50000}
       SEARCH_FALLBACK_VARIANT_CACHE_SIZE: ${SEARCH_FALLBACK_VARIANT_CACHE_SIZE:-50000}
       SEARCH_INDEX_CACHE_PATH: ${SEARCH_INDEX_CACHE_PATH:-/app/.cache/search/hybrid_search_index.pkl}
@@ -54,10 +57,17 @@ services:
       DATABASE_POOL_RECYCLE: ${DATABASE_POOL_RECYCLE:-1800}
       DEMO_USER_ID: ${DEMO_USER_ID:-user_1}
       DEMO_ORGANIZATION_ID: ${DEMO_ORGANIZATION_ID:-org_1}
-      HF_HOME: /app/.cache/huggingface
+      HF_HOME: /hf-cache
+      HUGGINGFACE_HUB_CACHE: /hf-cache/hub
     volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/alembic:/app/alembic:ro
+      - ./backend/alembic.ini:/app/alembic.ini:ro
       - ./ML:/app/ML:ro
-      - huggingface_cache:/app/.cache/huggingface
+      - type: bind
+        source: ${HF_CACHE_HOST_PATH}
+        target: /hf-cache
+        read_only: true
       - search_index_cache:/app/.cache/search
     ports:
       - "${BACKEND_PORT:-8000}:8000"
@@ -91,5 +101,4 @@ services:
 
 volumes:
   postgres_data:
-  huggingface_cache:
   search_index_cache:
