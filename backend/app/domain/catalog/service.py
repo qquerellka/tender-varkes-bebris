@@ -1,3 +1,5 @@
+import threading
+
 from app.db.repositories.catalog import CatalogRepository
 from app.db.repositories.search import SearchRepository
 from app.domain.catalog.schemas import (
@@ -20,6 +22,10 @@ from app.domain.search.normalizer import extract_query_terms
 
 
 class CatalogService:
+    _cache_lock = threading.Lock()
+    _categories_cache: tuple[CategoryRead, ...] | None = None
+    _suppliers_cache: tuple[SupplierRead, ...] | None = None
+
     def __init__(
         self,
         repository: CatalogRepository,
@@ -29,23 +35,41 @@ class CatalogService:
         self.search_repository = search_repository
 
     def list_categories(self) -> list[CategoryRead]:
-        return [
-            CategoryRead(
-                id=item.id,
-                name=item.name,
-                parent_id=item.parent_id,
-            )
-            for item in self.repository.list_categories()
-        ]
+        cache = self.__class__._categories_cache
+        if cache is not None:
+            return list(cache)
+
+        with self.__class__._cache_lock:
+            cache = self.__class__._categories_cache
+            if cache is None:
+                cache = tuple(
+                    CategoryRead(
+                        id=item.id,
+                        name=item.name,
+                        parent_id=item.parent_id,
+                    )
+                    for item in self.repository.list_categories()
+                )
+                self.__class__._categories_cache = cache
+        return list(cache)
 
     def list_suppliers(self) -> list[SupplierRead]:
-        return [
-            SupplierRead(
-                id=item.id,
-                name=item.name,
-            )
-            for item in self.repository.list_suppliers()
-        ]
+        cache = self.__class__._suppliers_cache
+        if cache is not None:
+            return list(cache)
+
+        with self.__class__._cache_lock:
+            cache = self.__class__._suppliers_cache
+            if cache is None:
+                cache = tuple(
+                    SupplierRead(
+                        id=item.id,
+                        name=item.name,
+                    )
+                    for item in self.repository.list_suppliers()
+                )
+                self.__class__._suppliers_cache = cache
+        return list(cache)
 
     def get_catalog_summary(self, user_id: str) -> CatalogSummaryRead:
         summary = self.repository.get_catalog_summary(user_id=user_id)
@@ -181,6 +205,8 @@ class CatalogService:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        allowed_document_ids: set[str] | None = None,
+        limit: int = 80,
     ) -> list[STEItemRead]:
         return [
             STEItemRead(
@@ -188,10 +214,12 @@ class CatalogService:
                 title=item.title,
                 description=item.description,
                 category_id=item.category_id,
-                category_name=item.category.name,
+                category_name=item.category_name,
                 supplier_id=item.supplier_id,
-                supplier_name=item.supplier.name,
-                attributes=item.attributes_json,
+                supplier_name=item.supplier_name,
+                attributes={},
+                attributes_text=item.attributes_text,
+                attribute_value_count=item.attribute_value_count,
                 status=item.status,
             )
             for item in (
@@ -206,6 +234,8 @@ class CatalogService:
                     strict_match=strict_match,
                     category_id=category_id,
                     supplier_id=supplier_id,
+                    allowed_document_ids=allowed_document_ids,
+                    limit=limit,
                 )
             )
         ]
@@ -221,6 +251,8 @@ class CatalogService:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        allowed_document_ids: set[str] | None = None,
+        limit: int = 80,
     ) -> list[SearchableSTEItemRead]:
         return [
             SearchableSTEItemRead(
@@ -228,10 +260,12 @@ class CatalogService:
                 title=hit.item.title,
                 description=hit.item.description,
                 category_id=hit.item.category_id,
-                category_name=hit.item.category.name,
+                category_name=hit.item.category_name,
                 supplier_id=hit.item.supplier_id,
-                supplier_name=hit.item.supplier.name,
-                attributes=hit.item.attributes_json,
+                supplier_name=hit.item.supplier_name,
+                attributes={},
+                attributes_text=hit.item.attributes_text,
+                attribute_value_count=hit.item.attribute_value_count,
                 status=hit.item.status,
                 retrieval_score=hit.retrieval_score,
                 retrieval_reasons=hit.retrieval_reasons,
@@ -249,6 +283,8 @@ class CatalogService:
                 strict_match=strict_match,
                 category_id=category_id,
                 supplier_id=supplier_id,
+                allowed_document_ids=allowed_document_ids,
+                limit=limit,
             )
         ]
 

@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+import logging
 import math
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Iterable
+from typing import AbstractSet, Any, Iterable
 
 import numpy as np
-from scipy.sparse import hstack
-from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.preprocessing import normalize as l2_normalize
+
+try:  # pragma: no cover - optional dependency for semantic fallback only
+    from scipy.sparse import hstack
+except ImportError:  # pragma: no cover - lexical retrieval still works without it
+    hstack = None
+
+try:  # pragma: no cover - optional dependency for semantic fallback only
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+except ImportError:  # pragma: no cover - lexical retrieval still works without it
+    TruncatedSVD = None
+    TfidfVectorizer = None
 
 from app.core.config import settings
 from app.domain.search.normalizer import (
@@ -26,7 +36,22 @@ from app.domain.search.semantic import (
     encode_bge_m3_texts,
 )
 
+SEMANTIC_BACKEND_DISABLED = "disabled"
+LOGGER = logging.getLogger(__name__)
+
 FIELD_NAMES = ("title", "category", "attributes", "description", "supplier")
+FIELD_INDEX_TEXT_LIMITS = {
+    "title": 512,
+    "category": 256,
+    "attributes": 4096,
+    "description": 4096,
+    "supplier": 256,
+}
+RUNTIME_FIELD_TEXT_NAMES = ("title", "attributes", "description")
+RUNTIME_FIELD_TERM_SET_NAMES = ("title", "category", "attributes")
+RUNTIME_FIELD_LEMMA_SET_NAMES = ("title", "category")
+RETRIEVAL_MIN_CANDIDATE_POOL = 300
+RETRIEVAL_MAX_CANDIDATE_POOL = 1200
 FIELD_WEIGHTS = {
     "title": 2.4,
     "attributes": 1.55,
@@ -96,20 +121,55 @@ class _ChannelHit:
 class _IndexedDocument:
     payload: SearchDocument
     field_texts: dict[str, str]
-    field_terms: dict[str, list[str]]
+    field_terms: dict[str, list[str]] | None
     field_term_sets: dict[str, frozenset[str]]
-    field_lemma_terms: dict[str, list[str]]
+    field_lemma_terms: dict[str, list[str]] | None
     field_lemma_sets: dict[str, frozenset[str]]
-    analysis_by_field: dict[str, SearchTextAnalysis]
-    combined_analysis: SearchTextAnalysis
+    analysis_by_field: dict[str, SearchTextAnalysis] | None
+    combined_analysis: "_RuntimeCombinedAnalysis | SearchTextAnalysis"
     title_trigrams: frozenset[str]
     text_trigrams: frozenset[str]
     fuzzy_variants: tuple[str, ...]
 
 
+@dataclass(slots=True, frozen=True)
+class _RuntimeCombinedAnalysis:
+    all_terms: frozenset[str]
+    token_set: frozenset[str]
+    brand_terms: frozenset[str]
+    model_terms: frozenset[str]
+    code_terms: frozenset[str]
+    size_terms: frozenset[str]
+
+
 class HybridSearchIndex:
-    def __init__(self, documents: Iterable[SearchDocument]) -> None:
-        indexed_documents = [self._index_document(document) for document in documents]
+    def __init__(
+        self,
+        documents: Iterable[SearchDocument],
+        *,
+        enable_semantic: bool = True,
+        progress: bool = False,
+    ) -> None:
+        started_at = time.perf_counter()
+        indexed_documents: list[_IndexedDocument] = []
+        try:
+            total_documents: int | None = len(documents)  # type: ignore[arg-type]
+        except TypeError:
+            total_documents = None
+
+        for index, document in enumerate(documents, start=1):
+            indexed_documents.append(self._index_document(document))
+            if progress and (
+                index == 1
+                or index % 1000 == 0
+                or (total_documents is not None and index == total_documents)
+            ):
+                self._emit_progress(
+                    "index-documents",
+                    index=index,
+                    total=total_documents,
+                    started_at=started_at,
+                )
         self.documents = indexed_documents
         self.documents_by_id = {
             document.payload.id: document
@@ -120,27 +180,49 @@ class HybridSearchIndex:
             document_id: position
             for position, document_id in enumerate(self.document_ids)
         }
+        self._all_positions = frozenset(range(len(indexed_documents)))
+        self._positions_by_category_id = self._build_position_lookup("category_id")
+        self._positions_by_supplier_id = self._build_position_lookup("supplier_id")
 
         (
             self._bm25_postings,
             self._bm25_doc_lengths,
             self._bm25_avg_doc_length,
             self._bm25_idf,
-        ) = self._build_fielded_bm25_index(use_lemmas=False)
+        ) = self._build_fielded_bm25_index(use_lemmas=False, progress=progress)
         (
             self._lemma_bm25_postings,
             self._lemma_bm25_doc_lengths,
             self._lemma_bm25_avg_doc_length,
             self._lemma_bm25_idf,
-        ) = self._build_fielded_bm25_index(use_lemmas=True)
+        ) = self._build_fielded_bm25_index(use_lemmas=True, progress=progress)
 
-        self._semantic_backend = SEMANTIC_BACKEND_FALLBACK
+        self._semantic_enabled = False
+        self._semantic_backend = SEMANTIC_BACKEND_DISABLED
         self._semantic_faiss_index = None
-        self._semantic_word_vectorizer: TfidfVectorizer | None = None
-        self._semantic_char_vectorizer: TfidfVectorizer | None = None
-        self._semantic_svd: TruncatedSVD | None = None
+        self._semantic_word_vectorizer: Any | None = None
+        self._semantic_char_vectorizer: Any | None = None
+        self._semantic_svd: Any | None = None
         self._semantic_matrix = np.zeros((len(indexed_documents), 0), dtype=float)
-        self._build_semantic_index()
+        self._release_build_only_state()
+
+        if progress:
+            elapsed = time.perf_counter() - started_at
+            print(
+                "[retrieval-index] ready "
+                f"documents={len(indexed_documents)} "
+                f"elapsed={_format_progress_seconds(elapsed)}",
+                flush=True,
+            )
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_semantic_faiss_index"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._disable_semantic_runtime_state()
 
     def search(
         self,
@@ -154,11 +236,13 @@ class HybridSearchIndex:
         strict_match: bool = False,
         category_id: str | None = None,
         supplier_id: str | None = None,
+        allowed_document_ids: set[str] | None = None,
         limit: int = 80,
     ) -> list[RetrievalResult]:
         allowed_positions = self._filter_positions(
             category_id=category_id,
             supplier_id=supplier_id,
+            allowed_document_ids=allowed_document_ids,
         )
         if not allowed_positions:
             return []
@@ -173,62 +257,140 @@ class HybridSearchIndex:
         trigram_queries = self._prepare_text_queries(trigram_terms)
         semantic_queries = self._prepare_text_queries(semantic_texts)
         query_analysis = structured_query or analyze_search_text(" ".join(lexical_terms))
+        expanded_limit = max(limit * 2, 60)
 
-        channel_results: dict[str, list[_ChannelHit]] = {}
+        if strict_match:
+            channel_results: dict[str, list[_ChannelHit]] = {}
+            if query_analysis.all_terms:
+                channel_results["exact_structured"] = self._retrieve_exact_structured(
+                    analysis=query_analysis,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                )
+                attribute_hits = self._retrieve_attribute(
+                    analysis=query_analysis,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                )
+                if attribute_hits:
+                    channel_results["attribute"] = attribute_hits
 
-        if query_analysis.all_terms:
-            channel_results["exact_structured"] = self._retrieve_exact_structured(
-                analysis=query_analysis,
-                allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
-            )
-            attribute_hits = self._retrieve_attribute(
-                analysis=query_analysis,
-                allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
-            )
-            if attribute_hits:
-                channel_results["attribute"] = attribute_hits
+            if lexical_tokens:
+                channel_results["bm25"] = self._retrieve_bm25(
+                    tokens=lexical_tokens,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                    use_lemmas=False,
+                )
+
+            if morphology_tokens:
+                channel_results["morphology"] = self._retrieve_bm25(
+                    tokens=morphology_tokens,
+                    allowed_positions=allowed_positions,
+                    limit=expanded_limit,
+                    use_lemmas=True,
+                )
+
+            return self._rrf_merge(channel_results, limit=limit)
+
+        cheap_channel_results: dict[str, list[_ChannelHit]] = {}
 
         if lexical_tokens:
-            channel_results["bm25"] = self._retrieve_bm25(
+            cheap_channel_results["bm25"] = self._retrieve_bm25(
                 tokens=lexical_tokens,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
                 use_lemmas=False,
             )
 
         if morphology_tokens:
-            channel_results["morphology"] = self._retrieve_bm25(
+            cheap_channel_results["morphology"] = self._retrieve_bm25(
                 tokens=morphology_tokens,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
                 use_lemmas=True,
             )
 
-        if not strict_match and synonym_tokens:
-            channel_results["synonym_bm25"] = self._retrieve_bm25(
+        if synonym_tokens:
+            cheap_channel_results["synonym_bm25"] = self._retrieve_bm25(
                 tokens=synonym_tokens,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
                 use_lemmas=False,
             )
 
-        if not strict_match and trigram_queries:
-            channel_results["fuzzy"] = self._retrieve_fuzzy(
-                queries=trigram_queries,
-                allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
-            )
-
-        if not strict_match and semantic_queries:
-            channel_results["semantic"] = self._retrieve_semantic(
+        if self._semantic_enabled and semantic_queries:
+            cheap_channel_results["semantic"] = self._retrieve_semantic(
                 queries=semantic_queries,
                 allowed_positions=allowed_positions,
-                limit=max(limit * 2, 60),
+                limit=expanded_limit,
             )
 
-        return self._rrf_merge(channel_results, limit=limit)
+        candidate_pool_limit = min(
+            RETRIEVAL_MAX_CANDIDATE_POOL,
+            max(limit * 8, RETRIEVAL_MIN_CANDIDATE_POOL),
+        )
+        shortlist_results = self._rrf_merge(
+            cheap_channel_results,
+            limit=candidate_pool_limit,
+        )
+        shortlist_positions = {
+            self._position_by_id[result.document_id]
+            for result in shortlist_results
+            if result.document_id in self._position_by_id
+        }
+
+        if not shortlist_positions and trigram_queries:
+            fuzzy_fallback = self._retrieve_fuzzy(
+                queries=trigram_queries,
+                allowed_positions=allowed_positions,
+                limit=candidate_pool_limit,
+            )
+            shortlist_positions = {
+                self._position_by_id[hit.document_id]
+                for hit in fuzzy_fallback
+                if hit.document_id in self._position_by_id
+            }
+            if fuzzy_fallback:
+                cheap_channel_results["fuzzy"] = fuzzy_fallback
+
+        if not shortlist_positions:
+            return shortlist_results[:limit]
+
+        shortlist_channel_results = {
+            channel_name: [
+                hit
+                for hit in ranking
+                if self._position_by_id.get(hit.document_id) in shortlist_positions
+            ]
+            for channel_name, ranking in cheap_channel_results.items()
+            if ranking
+        }
+
+        if query_analysis.all_terms:
+            shortlist_channel_results["exact_structured"] = self._retrieve_exact_structured(
+                analysis=query_analysis,
+                allowed_positions=shortlist_positions,
+                limit=expanded_limit,
+            )
+            attribute_hits = self._retrieve_attribute(
+                analysis=query_analysis,
+                allowed_positions=shortlist_positions,
+                limit=expanded_limit,
+            )
+            if attribute_hits:
+                shortlist_channel_results["attribute"] = attribute_hits
+
+        if trigram_queries and "fuzzy" not in shortlist_channel_results:
+            fuzzy_hits = self._retrieve_fuzzy(
+                queries=trigram_queries,
+                allowed_positions=shortlist_positions,
+                limit=expanded_limit,
+            )
+            if fuzzy_hits:
+                shortlist_channel_results["fuzzy"] = fuzzy_hits
+
+        return self._rrf_merge(shortlist_channel_results, limit=limit)
 
     @staticmethod
     def _index_document(document: SearchDocument) -> _IndexedDocument:
@@ -237,12 +399,16 @@ class HybridSearchIndex:
             for key, value in document.attributes.items()
             if key or value
         )
+        raw_field_texts = {
+            "title": document.title,
+            "category": document.category_name,
+            "attributes": attributes_text,
+            "description": document.description,
+            "supplier": document.supplier_name,
+        }
         field_texts = {
-            "title": normalize_query(document.title),
-            "category": normalize_query(document.category_name),
-            "attributes": normalize_query(attributes_text),
-            "description": normalize_query(document.description),
-            "supplier": normalize_query(document.supplier_name),
+            field_name: normalize_query(raw_value[: FIELD_INDEX_TEXT_LIMITS[field_name]])
+            for field_name, raw_value in raw_field_texts.items()
         }
 
         field_terms = {
@@ -317,21 +483,42 @@ class HybridSearchIndex:
         *,
         category_id: str | None,
         supplier_id: str | None,
+        allowed_document_ids: set[str] | None = None,
     ) -> set[int]:
-        positions: set[int] = set()
-        for position, document in enumerate(self.documents):
-            payload = document.payload
-            if category_id and payload.category_id != category_id:
-                continue
-            if supplier_id and payload.supplier_id != supplier_id:
-                continue
-            positions.add(position)
-        return positions
+        if allowed_document_ids is None:
+            positions: AbstractSet[int] = self._all_positions
+        else:
+            positions = {
+                self._position_by_id[document_id]
+                for document_id in allowed_document_ids
+                if document_id in self._position_by_id
+            }
+            if not positions:
+                return set()
+
+        if category_id:
+            category_positions = self._positions_by_category_id.get(category_id)
+            if not category_positions:
+                return set()
+            positions = positions & category_positions
+            if not positions:
+                return set()
+
+        if supplier_id:
+            supplier_positions = self._positions_by_supplier_id.get(supplier_id)
+            if not supplier_positions:
+                return set()
+            positions = positions & supplier_positions
+            if not positions:
+                return set()
+
+        return set(positions)
 
     def _build_fielded_bm25_index(
         self,
         *,
         use_lemmas: bool,
+        progress: bool = False,
     ) -> tuple[
         dict[str, dict[str, list[tuple[int, int]]]],
         dict[str, np.ndarray],
@@ -353,15 +540,19 @@ class HybridSearchIndex:
             return postings, doc_lengths, avg_doc_lengths, idf_by_field
 
         document_count = max(len(self.documents), 1)
+        bm25_started_at = time.perf_counter()
 
-        for field_name in FIELD_NAMES:
+        for field_index, field_name in enumerate(FIELD_NAMES, start=1):
             document_frequencies: Counter[str] = Counter()
             for position, document in enumerate(self.documents):
-                tokens = (
-                    document.field_lemma_terms[field_name]
+                term_map = (
+                    document.field_lemma_terms
                     if use_lemmas
-                    else document.field_terms[field_name]
+                    else document.field_terms
                 )
+                if term_map is None:
+                    raise RuntimeError("Build-time token state is not available for BM25 indexing")
+                tokens = term_map[field_name]
                 term_counts = Counter(tokens)
                 doc_lengths[field_name][position] = float(sum(term_counts.values()))
                 for token, term_frequency in term_counts.items():
@@ -377,7 +568,65 @@ class HybridSearchIndex:
                 denominator = frequency + 0.5
                 idf_by_field[field_name][token] = math.log1p(numerator / denominator)
 
+            if progress:
+                mode = "lemma" if use_lemmas else "lexical"
+                elapsed = time.perf_counter() - bm25_started_at
+                print(
+                    "[retrieval-index] bm25 "
+                    f"mode={mode} "
+                    f"field={field_name} "
+                    f"{field_index}/{len(FIELD_NAMES)} "
+                    f"elapsed={_format_progress_seconds(elapsed)}",
+                    flush=True,
+                )
+
         return postings, doc_lengths, avg_doc_lengths, idf_by_field
+
+    @staticmethod
+    def _emit_progress(
+        stage: str,
+        *,
+        index: int,
+        total: int | None,
+        started_at: float,
+    ) -> None:
+        elapsed = time.perf_counter() - started_at
+        rate = index / elapsed if elapsed > 0 else 0.0
+        remaining = (
+            ((total - index) / rate)
+            if rate > 0 and total is not None
+            else 0.0
+        )
+        if total is None:
+            print(
+                "[retrieval-index] "
+                f"{stage} "
+                f"count={index} "
+                f"elapsed={_format_progress_seconds(elapsed)}",
+                flush=True,
+            )
+            return
+
+        print(
+            "[retrieval-index] "
+            f"{stage} "
+            f"{index}/{total} "
+            f"({(index / max(total, 1)) * 100:.1f}%) "
+            f"elapsed={_format_progress_seconds(elapsed)} "
+            f"eta={_format_progress_seconds(remaining)}",
+            flush=True,
+        )
+
+    def _build_position_lookup(self, attribute_name: str) -> dict[str, frozenset[int]]:
+        positions_by_value: dict[str, set[int]] = defaultdict(set)
+        for position, document in enumerate(self.documents):
+            value = getattr(document.payload, attribute_name, "")
+            if value:
+                positions_by_value[str(value)].add(position)
+        return {
+            value: frozenset(positions)
+            for value, positions in positions_by_value.items()
+        }
 
     def _build_semantic_index(self) -> None:
         if not self.documents:
@@ -391,6 +640,31 @@ class HybridSearchIndex:
             return
 
         self._build_fallback_semantic_index(semantic_corpus)
+
+    def _release_build_only_state(self) -> None:
+        for document in self.documents:
+            document.field_texts = {
+                field_name: document.field_texts.get(field_name, "")
+                for field_name in RUNTIME_FIELD_TEXT_NAMES
+            }
+            document.field_term_sets = {
+                field_name: document.field_term_sets.get(field_name, frozenset())
+                for field_name in RUNTIME_FIELD_TERM_SET_NAMES
+            }
+            document.field_lemma_sets = {
+                field_name: document.field_lemma_sets.get(field_name, frozenset())
+                for field_name in RUNTIME_FIELD_LEMMA_SET_NAMES
+            }
+            document.field_terms = None
+            document.field_lemma_terms = None
+            document.analysis_by_field = None
+            document.combined_analysis = _to_runtime_combined_analysis(document.combined_analysis)
+            document.payload.title = ""
+            document.payload.description = ""
+            document.payload.category_name = ""
+            document.payload.supplier_name = ""
+            document.payload.attributes = {}
+            document.payload.status = ""
 
     @staticmethod
     def _build_semantic_document_text(document: _IndexedDocument) -> str:
@@ -429,6 +703,18 @@ class HybridSearchIndex:
         return True
 
     def _build_fallback_semantic_index(self, semantic_corpus: list[str]) -> None:
+        if TfidfVectorizer is None or hstack is None:
+            LOGGER.warning(
+                "Semantic fallback is disabled because scipy/sklearn are not installed."
+            )
+            self._semantic_backend = SEMANTIC_BACKEND_DISABLED
+            self._semantic_matrix = np.zeros((len(self.documents), 0), dtype=float)
+            self._semantic_faiss_index = None
+            self._semantic_word_vectorizer = None
+            self._semantic_char_vectorizer = None
+            self._semantic_svd = None
+            return
+
         self._semantic_backend = SEMANTIC_BACKEND_FALLBACK
 
         self._semantic_word_vectorizer = TfidfVectorizer(
@@ -462,14 +748,23 @@ class HybridSearchIndex:
         else:
             dense = semantic_matrix.toarray()
 
-        self._semantic_matrix = l2_normalize(dense)
+        self._semantic_matrix = _l2_normalize(dense)
         self._semantic_faiss_index = None
+
+    def _disable_semantic_runtime_state(self) -> None:
+        self._semantic_enabled = False
+        self._semantic_backend = SEMANTIC_BACKEND_DISABLED
+        self._semantic_faiss_index = None
+        self._semantic_word_vectorizer = None
+        self._semantic_char_vectorizer = None
+        self._semantic_svd = None
+        self._semantic_matrix = np.zeros((len(self.documents), 0), dtype=float)
 
     def _retrieve_bm25(
         self,
         *,
         tokens: list[str],
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
         use_lemmas: bool,
     ) -> list[_ChannelHit]:
@@ -515,7 +810,7 @@ class HybridSearchIndex:
         self,
         *,
         analysis: SearchTextAnalysis,
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if not analysis.normalized_text:
@@ -524,16 +819,16 @@ class HybridSearchIndex:
         scores: dict[int, float] = {}
         features_by_position: dict[int, dict[str, float]] = {}
 
-        query_term_set = set(analysis.text_terms)
-        query_lemma_set = set(analysis.lemma_terms)
-        category_hint_set = set(analysis.category_hints)
-        attribute_term_set = set(analysis.attribute_terms)
-        brand_term_set = set(analysis.brand_terms)
-        model_term_set = set(analysis.model_terms)
-        code_term_set = set(analysis.code_terms)
-        size_term_set = set(analysis.size_terms)
+        query_term_set = analysis.text_term_set
+        query_lemma_set = analysis.lemma_term_set
+        category_hint_set = analysis.category_hint_set
+        attribute_term_set = analysis.attribute_term_set
+        brand_term_set = analysis.brand_term_set
+        model_term_set = analysis.model_term_set
+        code_term_set = analysis.code_term_set
+        size_term_set = analysis.size_term_set
         quantity_constraints = analysis.quantity_constraints
-        strict_terms = set(analysis.strict_terms)
+        strict_terms = analysis.strict_terms
 
         for position in allowed_positions:
             document = self.documents[position]
@@ -591,20 +886,20 @@ class HybridSearchIndex:
                     score += min(category_matches * 0.17, 0.51)
                     feature_map["category_match_flag"] = 1.0
 
-            brand_matches = len(brand_term_set & set(document.combined_analysis.brand_terms))
+            brand_matches = len(brand_term_set & document.combined_analysis.brand_terms)
             if brand_matches:
                 score += 0.36 + min(brand_matches * 0.12, 0.24)
                 feature_map["brand_match_flag"] = 1.0
 
-            model_matches = len(model_term_set & set(document.combined_analysis.model_terms))
+            model_matches = len(model_term_set & document.combined_analysis.model_terms)
             if model_matches:
                 score += 0.42 + min(model_matches * 0.12, 0.3)
 
-            code_matches = len(code_term_set & set(document.combined_analysis.code_terms))
+            code_matches = len(code_term_set & document.combined_analysis.code_terms)
             if code_matches:
                 score += 0.35 + min(code_matches * 0.1, 0.2)
 
-            size_matches = len(size_term_set & set(document.combined_analysis.size_terms))
+            size_matches = len(size_term_set & document.combined_analysis.size_terms)
             if size_matches:
                 score += 0.28 + min(size_matches * 0.12, 0.24)
 
@@ -617,7 +912,7 @@ class HybridSearchIndex:
                     score += min(numeric_matches * 0.28, 0.84)
 
             strict_match_count = 0
-            combined_terms = set(document.combined_analysis.all_terms)
+            combined_terms = document.combined_analysis.all_terms
             for term in strict_terms:
                 if term in combined_terms:
                     strict_match_count += 1
@@ -649,7 +944,7 @@ class HybridSearchIndex:
         self,
         *,
         analysis: SearchTextAnalysis,
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if (
@@ -661,8 +956,8 @@ class HybridSearchIndex:
 
         scores: dict[int, float] = {}
         features_by_position: dict[int, dict[str, float]] = {}
-        attribute_term_set = set(analysis.attribute_terms)
-        category_hint_set = set(analysis.category_hints)
+        attribute_term_set = analysis.attribute_term_set
+        category_hint_set = analysis.category_hint_set
 
         for position in allowed_positions:
             document = self.documents[position]
@@ -720,7 +1015,7 @@ class HybridSearchIndex:
         self,
         *,
         queries: list[str],
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if not queries:
@@ -780,7 +1075,7 @@ class HybridSearchIndex:
         self,
         *,
         queries: list[str],
-        allowed_positions: set[int],
+        allowed_positions: AbstractSet[int],
         limit: int,
     ) -> list[_ChannelHit]:
         if not queries or self._semantic_matrix.size == 0:
@@ -847,7 +1142,7 @@ class HybridSearchIndex:
         else:
             dense_query = sparse_query.toarray()
 
-        return l2_normalize(dense_query)
+        return _l2_normalize(dense_query)
 
     def _search_semantic_with_faiss(
         self,
@@ -1001,8 +1296,8 @@ def _count_matching_constraints(
         return 0
 
     matches = 0
-    document_terms = set(document.combined_analysis.all_terms)
-    document_tokens = set(document.combined_analysis.token_sequence)
+    document_terms = document.combined_analysis.all_terms
+    document_tokens = document.combined_analysis.token_set
     for constraint in constraints:
         if constraint.normalized in document_terms:
             matches += 1
@@ -1010,6 +1305,36 @@ def _count_matching_constraints(
         if constraint.value in document_tokens and constraint.unit in document_terms:
             matches += 1
     return matches
+
+
+def _to_runtime_combined_analysis(
+    analysis: SearchTextAnalysis | _RuntimeCombinedAnalysis,
+) -> _RuntimeCombinedAnalysis:
+    if isinstance(analysis, _RuntimeCombinedAnalysis):
+        return analysis
+    return _RuntimeCombinedAnalysis(
+        all_terms=analysis.all_term_set,
+        token_set=analysis.token_set,
+        brand_terms=analysis.brand_term_set,
+        model_terms=analysis.model_term_set,
+        code_terms=analysis.code_term_set,
+        size_terms=analysis.size_term_set,
+    )
+
+
+def _l2_normalize(matrix: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    safe_norms = np.where(norms > 0, norms, 1.0)
+    return matrix / safe_norms
+
+
+def _format_progress_seconds(value: float) -> str:
+    total_seconds = max(int(value), 0)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def _build_trigrams(value: str) -> frozenset[str]:

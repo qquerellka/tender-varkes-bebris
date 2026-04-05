@@ -7,9 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sklearn.preprocessing import normalize as l2_normalize
 
 from app.core.config import settings
+
+try:  # pragma: no cover - optional dependency used only for semantic normalization
+    from sklearn.preprocessing import normalize as _sklearn_l2_normalize
+except ImportError:  # pragma: no cover - fallback is covered instead
+    _sklearn_l2_normalize = None
 
 try:  # pragma: no cover - optional dependency for vector search acceleration
     import faiss
@@ -118,8 +122,17 @@ def _normalize_embeddings(values: Any) -> np.ndarray | None:
     if matrix.size == 0:
         return None
 
-    normalized = l2_normalize(matrix)
+    normalized = _l2_normalize(matrix)
     return np.asarray(normalized, dtype=np.float32)
+
+
+def _l2_normalize(matrix: np.ndarray) -> np.ndarray:
+    if _sklearn_l2_normalize is not None:
+        return _sklearn_l2_normalize(matrix)
+
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    safe_norms = np.where(norms > 0, norms, 1.0)
+    return matrix / safe_norms
 
 
 def _is_model_cached_locally(model_name: str) -> bool:

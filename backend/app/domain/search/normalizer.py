@@ -1,6 +1,9 @@
 import re
+from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
+
+from app.core.config import settings
 
 try:
     from pymorphy3 import MorphAnalyzer
@@ -156,6 +159,7 @@ TERM_EXPANSIONS = {
     "гсм": ["горюче смазочные материалы"],
     "сиз": ["средства индивидуальной защиты"],
 }
+MAX_SEARCH_TOKEN_LENGTH = 64
 
 PHRASE_NORMALIZATION_PATTERNS = (
     (re.compile(r"\bканц[\w-]*\s+товар[\w-]*\b"), "канцтовары"),
@@ -251,6 +255,30 @@ CYRILLIC_ABBREVIATIONS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class SpellVocabularyIndex:
+    tokens: frozenset[str]
+    signature_buckets: dict[tuple[str, int], tuple[str, ...]]
+    token_frequencies: dict[str, int] = field(default_factory=dict)
+    protected_tokens: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class FuzzyTokenCorrection:
+    source: str
+    corrected: str
+    confidence: str
+    confidence_score: float
+
+
+@dataclass(frozen=True, slots=True)
+class FuzzyQueryCorrection:
+    corrected_query: str
+    confidence: str
+    confidence_score: float
+    token_corrections: tuple[FuzzyTokenCorrection, ...] = ()
+
+
 def normalize_query(value: str) -> str:
     value = value.strip().lower().replace("ё", "е")
     value = GRAMMAGE_PATTERN.sub("гм2", value)
@@ -278,56 +306,97 @@ def correct_query(value: str, corrections: dict[str, str] | None = None) -> str 
 
 def correct_query_fuzzy(
     value: str,
-    vocabulary: Iterable[str] | None = None,
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None = None,
+    *,
+    protected_tokens: Iterable[str] | None = None,
 ) -> str | None:
+    correction = resolve_query_fuzzy_correction(
+        value,
+        vocabulary,
+        protected_tokens=protected_tokens,
+    )
+    if correction is None:
+        return None
+    return correction.corrected_query
+
+
+def resolve_query_fuzzy_correction(
+    value: str,
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None = None,
+    *,
+    protected_tokens: Iterable[str] | None = None,
+) -> FuzzyQueryCorrection | None:
     normalized = normalize_query(value)
-    spell_vocabulary = _build_spell_vocabulary(vocabulary)
+    if not normalized:
+        return None
+
+    spell_vocabulary_index = _ensure_spell_vocabulary_index(vocabulary)
+    explicit_protected_tokens = _normalize_protected_tokens(protected_tokens)
     corrected_tokens: list[str] = []
-    changed = False
+    token_corrections: list[FuzzyTokenCorrection] = []
 
     for token in normalized.split():
-        if (
-            token in STOP_WORDS
-            or token.isdigit()
-            or len(token) < 4
-            or token in spell_vocabulary
+        if _should_skip_fuzzy_token(
+            token,
+            vocabulary=spell_vocabulary_index,
+            protected_tokens=explicit_protected_tokens,
         ):
             corrected_tokens.append(token)
             continue
 
-        replacement = _best_fuzzy_correction(token, spell_vocabulary)
-        corrected_tokens.append(replacement or token)
-        changed = changed or replacement is not None
+        decision = _best_fuzzy_correction(token, spell_vocabulary_index)
+        if decision is None or decision.confidence == "low":
+            corrected_tokens.append(token)
+            continue
 
-    if not changed:
+        corrected_tokens.append(decision.corrected)
+        token_corrections.append(decision)
+
+    if not token_corrections:
         return None
 
     corrected = normalize_query(" ".join(corrected_tokens))
-    return corrected if corrected != normalized else None
+    if corrected == normalized:
+        return None
+
+    confidence_score = min(
+        correction.confidence_score for correction in token_corrections
+    )
+    confidence = _confidence_label(confidence_score)
+    if confidence == "low":
+        return None
+
+    return FuzzyQueryCorrection(
+        corrected_query=corrected,
+        confidence=confidence,
+        confidence_score=round(confidence_score, 4),
+        token_corrections=tuple(token_corrections),
+    )
 
 
 def expand_fuzzy_term_variants(
     terms: list[str],
-    vocabulary: Iterable[str] | None = None,
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None = None,
     *,
     limit_per_term: int = 2,
+    protected_tokens: Iterable[str] | None = None,
 ) -> list[str]:
-    spell_vocabulary = _build_spell_vocabulary(vocabulary)
+    spell_vocabulary_index = _ensure_spell_vocabulary_index(vocabulary)
+    explicit_protected_tokens = _normalize_protected_tokens(protected_tokens)
     expanded: list[str] = []
 
     for value in terms:
         for token in extract_query_terms(value):
-            if (
-                token in STOP_WORDS
-                or token.isdigit()
-                or len(token) < 4
-                or token in spell_vocabulary
+            if _should_skip_fuzzy_token(
+                token,
+                vocabulary=spell_vocabulary_index,
+                protected_tokens=explicit_protected_tokens,
             ):
                 continue
 
             for candidate in _select_fuzzy_variants(
                 token,
-                spell_vocabulary,
+                spell_vocabulary_index,
                 limit=limit_per_term,
             ):
                 _append_variant(expanded, candidate)
@@ -364,6 +433,8 @@ def extract_query_terms(value: str, *, deduplicate: bool = True) -> list[str]:
             continue
         if len(normalized_token) == 1 and not normalized_token.isdigit():
             continue
+        if len(normalized_token) > MAX_SEARCH_TOKEN_LENGTH and not normalized_token.isdigit():
+            continue
         terms.append(normalized_token)
 
     if not deduplicate:
@@ -376,7 +447,11 @@ def extract_normalized_tokens(
     *,
     deduplicate: bool = False,
 ) -> list[str]:
-    tokens = [token for token in normalize_query(value).split() if token]
+    tokens = [
+        token
+        for token in normalize_query(value).split()
+        if token and (len(token) <= MAX_SEARCH_TOKEN_LENGTH or token.isdigit())
+    ]
     if not deduplicate:
         return tokens
     return list(dict.fromkeys(tokens))
@@ -464,10 +539,13 @@ def _get_morph_analyzer() -> Any | None:
         return None
 
 
+@lru_cache(maxsize=settings.search_lemmatizer_cache_size)
 def _lemmatize_russian_term(term: str) -> str | None:
     if term in CYRILLIC_ABBREVIATIONS:
         return None
     if not PURE_CYRILLIC_TOKEN_PATTERN.fullmatch(term):
+        return None
+    if len(term) > MAX_SEARCH_TOKEN_LENGTH:
         return None
 
     analyzer = _get_morph_analyzer()
@@ -488,8 +566,11 @@ def _lemmatize_russian_term(term: str) -> str | None:
     return lemma
 
 
+@lru_cache(maxsize=settings.search_fallback_variant_cache_size)
 def _expand_russian_fallback_variants(term: str) -> list[str]:
     if not PURE_CYRILLIC_TOKEN_PATTERN.fullmatch(term):
+        return []
+    if len(term) > MAX_SEARCH_TOKEN_LENGTH:
         return []
 
     variants: list[str] = []
@@ -542,31 +623,140 @@ def _build_spell_vocabulary(vocabulary: Iterable[str] | None) -> set[str]:
     return normalized_vocabulary
 
 
-def _best_fuzzy_correction(token: str, vocabulary: set[str]) -> str | None:
+def build_spell_vocabulary_index(
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None,
+    *,
+    token_frequencies: Mapping[str, int] | None = None,
+    protected_tokens: Iterable[str] | None = None,
+) -> SpellVocabularyIndex:
+    if isinstance(vocabulary, SpellVocabularyIndex):
+        return vocabulary
+
+    normalized_vocabulary = _build_spell_vocabulary(vocabulary)
+    normalized_token_frequencies = _normalize_spell_token_frequencies(
+        token_frequencies
+    )
+    signature_buckets: dict[tuple[str, int], list[str]] = {}
+
+    for token in normalized_vocabulary:
+        signature = _spell_signature(token)
+        if not signature:
+            continue
+
+        signature_length = len(signature)
+        prefixes = {signature[:1]}
+        if signature_length >= 2:
+            prefixes.add(signature[:2])
+
+        for prefix in prefixes:
+            signature_buckets.setdefault((prefix, signature_length), []).append(token)
+
+    return SpellVocabularyIndex(
+        tokens=frozenset(normalized_vocabulary),
+        signature_buckets={
+            key: tuple(
+                sorted(
+                    values,
+                    key=lambda value: (
+                        -normalized_token_frequencies.get(value, 1),
+                        value,
+                    ),
+                )
+            )
+            for key, values in signature_buckets.items()
+        },
+        token_frequencies=normalized_token_frequencies,
+        protected_tokens=frozenset(_normalize_protected_tokens(protected_tokens)),
+    )
+
+
+def _ensure_spell_vocabulary_index(
+    vocabulary: Iterable[str] | SpellVocabularyIndex | None,
+) -> SpellVocabularyIndex:
+    return build_spell_vocabulary_index(vocabulary)
+
+
+def _normalize_spell_token_frequencies(
+    token_frequencies: Mapping[str, int] | None,
+) -> dict[str, int]:
+    normalized_frequencies: dict[str, int] = {}
+    for token, frequency in (token_frequencies or {}).items():
+        normalized_token = normalize_query(str(token))
+        if not normalized_token:
+            continue
+        normalized_frequencies[normalized_token] = max(
+            normalized_frequencies.get(normalized_token, 0),
+            int(frequency or 0),
+        )
+    return normalized_frequencies
+
+
+def _normalize_protected_tokens(tokens: Iterable[str] | None) -> set[str]:
+    normalized_tokens: set[str] = set()
+    for token in tokens or ():
+        normalized_token = normalize_query(str(token))
+        if normalized_token:
+            normalized_tokens.add(normalized_token)
+    return normalized_tokens
+
+
+def _best_fuzzy_correction(
+    token: str,
+    vocabulary: SpellVocabularyIndex,
+) -> FuzzyTokenCorrection | None:
     candidates = _rank_fuzzy_candidates(token, vocabulary)
     if not candidates:
         return None
 
-    best_distance, best_prefix_penalty, best_len_delta, best_candidate = candidates[0]
-    runner_up_distance = candidates[1][0] if len(candidates) > 1 else best_distance + 2
-    runner_up_prefix_penalty = candidates[1][1] if len(candidates) > 1 else 0
+    (
+        best_distance,
+        best_prefix_penalty,
+        best_len_delta,
+        best_frequency_penalty,
+        best_candidate,
+    ) = candidates[0]
+    runner_up = candidates[1] if len(candidates) > 1 else None
+    runner_up_distance = runner_up[0] if runner_up is not None else best_distance + 2
+    runner_up_prefix_penalty = runner_up[1] if runner_up is not None else 0
+    runner_up_len_delta = runner_up[2] if runner_up is not None else best_len_delta + 1
+    runner_up_frequency = -runner_up[3] if runner_up is not None else 0
+    best_frequency = -best_frequency_penalty
 
     if (
-        len(candidates) > 1
+        runner_up is not None
         and best_distance == runner_up_distance
         and best_prefix_penalty == runner_up_prefix_penalty
-        and best_len_delta == candidates[1][2]
+        and best_len_delta == runner_up_len_delta
     ):
-        return None
+        if not (
+            best_frequency >= 5
+            and best_frequency >= max(runner_up_frequency, 1) * 4
+        ):
+            return None
     allowed_distance = _max_edit_distance(_spell_signature(token))
     if best_distance == allowed_distance and runner_up_distance - best_distance <= 0:
         return None
-    return best_candidate
+
+    confidence_score = _score_fuzzy_candidate_confidence(
+        best_distance=best_distance,
+        best_prefix_penalty=best_prefix_penalty,
+        best_frequency=best_frequency,
+        runner_up_distance=runner_up_distance,
+        runner_up_frequency=runner_up_frequency,
+        has_runner_up=runner_up is not None,
+    )
+
+    return FuzzyTokenCorrection(
+        source=token,
+        corrected=best_candidate,
+        confidence=_confidence_label(confidence_score),
+        confidence_score=round(confidence_score, 4),
+    )
 
 
 def _select_fuzzy_variants(
     token: str,
-    vocabulary: set[str],
+    vocabulary: SpellVocabularyIndex,
     *,
     limit: int,
 ) -> list[str]:
@@ -577,7 +767,7 @@ def _select_fuzzy_variants(
     best_distance = ranked_candidates[0][0]
     selected: list[str] = []
 
-    for distance, prefix_penalty, _, candidate in ranked_candidates:
+    for distance, prefix_penalty, _, _, candidate in ranked_candidates:
         shared_prefix = -prefix_penalty
         if shared_prefix == 0 and distance > 1:
             continue
@@ -594,13 +784,22 @@ def _select_fuzzy_variants(
 
 def _rank_fuzzy_candidates(
     token: str,
-    vocabulary: set[str],
-) -> list[tuple[int, int, int, str]]:
+    vocabulary: SpellVocabularyIndex,
+) -> list[tuple[int, int, int, int, str]]:
     token_signature = _spell_signature(token)
     allowed_distance = _max_edit_distance(token_signature)
-    candidates: list[tuple[int, int, int, str]] = []
+    candidates: list[tuple[int, int, int, int, str]] = []
 
-    for candidate in vocabulary:
+    min_length = max(3, len(token_signature) - allowed_distance)
+    max_length = len(token_signature) + allowed_distance
+    candidate_pool = _lookup_fuzzy_candidate_pool(
+        token_signature=token_signature,
+        vocabulary=vocabulary,
+        min_length=min_length,
+        max_length=max_length,
+    )
+
+    for candidate in candidate_pool:
         if candidate == token:
             continue
         if abs(len(candidate) - len(token)) > allowed_distance:
@@ -639,12 +838,44 @@ def _rank_fuzzy_candidates(
                 effective_distance,
                 -shared_prefix,
                 abs(len(candidate) - len(token)),
+                -max(vocabulary.token_frequencies.get(candidate, 0), 1),
                 candidate,
             )
         )
 
     candidates.sort()
     return candidates
+
+
+def _lookup_fuzzy_candidate_pool(
+    *,
+    token_signature: str,
+    vocabulary: SpellVocabularyIndex,
+    min_length: int,
+    max_length: int,
+) -> tuple[str, ...]:
+    if not token_signature:
+        return ()
+
+    for prefix_length in (2, 1):
+        if len(token_signature) < prefix_length:
+            continue
+
+        prefix = token_signature[:prefix_length]
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        for candidate_length in range(min_length, max_length + 1):
+            for candidate in vocabulary.signature_buckets.get((prefix, candidate_length), ()):
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                candidates.append(candidate)
+
+        if candidates:
+            return tuple(candidates)
+
+    return ()
 
 
 def _spell_signature(value: str) -> str:
@@ -717,6 +948,77 @@ def _shared_prefix_len(left: str, right: str) -> int:
             break
         size += 1
     return size
+
+
+def _should_skip_fuzzy_token(
+    token: str,
+    *,
+    vocabulary: SpellVocabularyIndex,
+    protected_tokens: set[str],
+) -> bool:
+    if token in STOP_WORDS or token in vocabulary.tokens:
+        return True
+    if token in vocabulary.protected_tokens or token in protected_tokens:
+        return True
+    if token.isdigit() or len(token) < 4:
+        return True
+    if any(char.isdigit() for char in token):
+        return True
+    if PURE_LATIN_TOKEN_PATTERN.fullmatch(token):
+        return True
+    return False
+
+
+def _score_fuzzy_candidate_confidence(
+    *,
+    best_distance: int,
+    best_prefix_penalty: int,
+    best_frequency: int,
+    runner_up_distance: int,
+    runner_up_frequency: int,
+    has_runner_up: bool,
+) -> float:
+    score = 0.32
+    shared_prefix = -best_prefix_penalty
+    distance_margin = runner_up_distance - best_distance if has_runner_up else 2
+
+    if best_distance <= 1:
+        score += 0.3
+    elif best_distance == 2:
+        score += 0.18
+    else:
+        score += 0.08
+
+    if shared_prefix >= 3:
+        score += 0.2
+    elif shared_prefix >= 2:
+        score += 0.15
+    elif shared_prefix >= 1:
+        score += 0.08
+
+    if distance_margin >= 2:
+        score += 0.2
+    elif distance_margin >= 1:
+        score += 0.12
+    elif has_runner_up:
+        score -= 0.08
+
+    if best_frequency >= 5:
+        score += 0.04
+    if has_runner_up and best_frequency >= max(runner_up_frequency, 1) * 2:
+        score += 0.04
+    if not has_runner_up:
+        score += 0.05
+
+    return max(0.0, min(score, 0.99))
+
+
+def _confidence_label(score: float) -> str:
+    if score >= 0.82:
+        return "high"
+    if score >= 0.64:
+        return "medium"
+    return "low"
 
 
 def _looks_like_keyboard_layout_mistake(token: str) -> bool:

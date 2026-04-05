@@ -1,13 +1,29 @@
 from difflib import SequenceMatcher
+from typing import Any
 
-from app.domain.catalog.schemas import STEItemRead
 from app.domain.personalization.schemas import SearchProfileRead
 from app.domain.search.normalizer import extract_query_terms
 from app.domain.search.schemas import CandidateItem
 
 
+def _extract_attributes_payload(item: Any) -> tuple[str, int]:
+    attributes_text = str(getattr(item, "attributes_text", "") or "").strip()
+    attribute_value_count = int(getattr(item, "attribute_value_count", 0) or 0)
+    if attributes_text or attribute_value_count:
+        return attributes_text, attribute_value_count
+
+    attributes = getattr(item, "attributes", {}) or {}
+    if not isinstance(attributes, dict):
+        return "", 0
+
+    return (
+        " ".join(str(value).strip() for value in attributes.values() if str(value).strip()),
+        len(attributes),
+    )
+
+
 def build_candidate(
-    item: STEItemRead,
+    item: Any,
     normalized_query: str,
     profile: SearchProfileRead,
     query_terms: list[str] | None = None,
@@ -16,14 +32,41 @@ def build_candidate(
     retrieval_channel_scores: dict[str, float] | None = None,
     retrieval_channel_ranks: dict[str, int] | None = None,
     retrieval_features: dict[str, float] | None = None,
+    retrieval_only: bool = False,
 ) -> CandidateItem:
     title = item.title.lower()
     description = item.description.lower()
-    attributes_blob = " ".join(item.attributes.values()).lower()
+    attributes_text, attribute_value_count = _extract_attributes_payload(item)
+    attributes_blob = attributes_text.lower()
     lexical_score = 0.0
     reasons: list[str] = []
     query_tokens = query_terms or extract_query_terms(normalized_query)
     structured_features = retrieval_features or {}
+
+    if retrieval_only:
+        retrieval_only_score = round(float(retrieval_score), 4)
+        reasons = list(dict.fromkeys(retrieval_reasons or ["retrieval_rrf"]))
+        return CandidateItem(
+            id=item.id,
+            title=item.title,
+            category=item.category_name,
+            supplier=item.supplier_name,
+            description=item.description,
+            score=retrieval_only_score,
+            reasons=reasons,
+            category_id=item.category_id,
+            supplier_id=item.supplier_id,
+            status=item.status,
+            attributes={},
+            attributes_text=attributes_text,
+            attribute_value_count=attribute_value_count,
+            baseline_score=retrieval_only_score,
+            retrieval_score=retrieval_only_score,
+            retrieval_reasons=list(dict.fromkeys(retrieval_reasons or [])),
+            retrieval_channel_scores=dict(retrieval_channel_scores or {}),
+            retrieval_channel_ranks=dict(retrieval_channel_ranks or {}),
+            retrieval_features=dict(structured_features),
+        )
 
     if normalized_query:
         if normalized_query == title:
@@ -104,7 +147,9 @@ def build_candidate(
         category_id=item.category_id,
         supplier_id=item.supplier_id,
         status=item.status,
-        attributes=item.attributes,
+        attributes={},
+        attributes_text=attributes_text,
+        attribute_value_count=attribute_value_count,
         baseline_score=round(lexical_score, 4),
         retrieval_score=round(retrieval_score, 4),
         retrieval_reasons=list(dict.fromkeys(retrieval_reasons or [])),

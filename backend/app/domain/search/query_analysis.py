@@ -148,17 +148,27 @@ class SearchTextAnalysis:
     category_hints: list[str] = field(default_factory=list)
     attribute_terms: list[str] = field(default_factory=list)
     quantity_constraints: list[QuantityConstraint] = field(default_factory=list)
+    phrase_queries: tuple[str, ...] = field(init=False)
+    strict_terms: tuple[str, ...] = field(init=False)
+    all_terms: tuple[str, ...] = field(init=False)
+    token_set: frozenset[str] = field(init=False)
+    text_term_set: frozenset[str] = field(init=False)
+    lemma_term_set: frozenset[str] = field(init=False)
+    brand_term_set: frozenset[str] = field(init=False)
+    model_term_set: frozenset[str] = field(init=False)
+    code_term_set: frozenset[str] = field(init=False)
+    size_term_set: frozenset[str] = field(init=False)
+    category_hint_set: frozenset[str] = field(init=False)
+    attribute_term_set: frozenset[str] = field(init=False)
+    all_term_set: frozenset[str] = field(init=False)
 
-    @property
-    def phrase_queries(self) -> list[str]:
+    def __post_init__(self) -> None:
         phrases = [self.normalized_text]
         category_phrase = " ".join(self.category_hints).strip()
         if category_phrase and category_phrase != self.normalized_text:
             phrases.append(category_phrase)
-        return list(dict.fromkeys(item for item in phrases if item))
+        self.phrase_queries = tuple(dict.fromkeys(item for item in phrases if item))
 
-    @property
-    def strict_terms(self) -> list[str]:
         strict_terms = [
             *self.brand_terms,
             *self.model_terms,
@@ -169,10 +179,8 @@ class SearchTextAnalysis:
             *self.unit_terms,
         ]
         strict_terms.extend(constraint.normalized for constraint in self.quantity_constraints)
-        return list(dict.fromkeys(item for item in strict_terms if item))
+        self.strict_terms = tuple(dict.fromkeys(item for item in strict_terms if item))
 
-    @property
-    def all_terms(self) -> list[str]:
         combined = [
             *self.text_terms,
             *self.lemma_terms,
@@ -189,7 +197,17 @@ class SearchTextAnalysis:
             *self.attribute_terms,
         ]
         combined.extend(constraint.normalized for constraint in self.quantity_constraints)
-        return list(dict.fromkeys(item for item in combined if item))
+        self.all_terms = tuple(dict.fromkeys(item for item in combined if item))
+        self.token_set = frozenset(self.token_sequence)
+        self.text_term_set = frozenset(self.text_terms)
+        self.lemma_term_set = frozenset(self.lemma_terms)
+        self.brand_term_set = frozenset(self.brand_terms)
+        self.model_term_set = frozenset(self.model_terms)
+        self.code_term_set = frozenset(self.code_terms)
+        self.size_term_set = frozenset(self.size_terms)
+        self.category_hint_set = frozenset(self.category_hints)
+        self.attribute_term_set = frozenset(self.attribute_terms)
+        self.all_term_set = frozenset(self.all_terms)
 
     @property
     def is_hard_query(self) -> bool:

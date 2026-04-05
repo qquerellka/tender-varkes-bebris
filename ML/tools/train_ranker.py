@@ -37,7 +37,6 @@ NUMERIC_FEATURES = [
     "retrieval_morphology",
     "retrieval_fuzzy",
     "retrieval_synonym",
-    "retrieval_semantic",
     "retrieval_rrf",
     "channel_score_exact_structured",
     "channel_score_attribute",
@@ -45,14 +44,12 @@ NUMERIC_FEATURES = [
     "channel_score_morphology",
     "channel_score_fuzzy",
     "channel_score_synonym_bm25",
-    "channel_score_semantic",
     "channel_rank_exact_structured",
     "channel_rank_attribute",
     "channel_rank_bm25",
     "channel_rank_morphology",
     "channel_rank_fuzzy",
     "channel_rank_synonym_bm25",
-    "channel_rank_semantic",
     "exact_match_flag",
     "phrase_match_flag",
     "category_match_flag",
@@ -62,9 +59,6 @@ NUMERIC_FEATURES = [
     "appeared_in_multiple_channels",
     "strict_term_coverage",
     "fuzzy_edit_score",
-    "semantic_backend_bge_m3",
-    "semantic_backend_fallback",
-    "semantic_via_faiss",
     "title_term_overlap",
     "description_term_overlap",
     "attribute_term_overlap",
@@ -89,7 +83,7 @@ CATEGORICAL_FEATURES = [
 
 def parse_args() -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
-    default_splits = script_dir.parent / "data" / "synthetic" / "splits"
+    default_splits = script_dir.parent / "data" / "orig" / "derived" / "splits"
     default_artifacts = script_dir.parent / "models" / "catboost_ranker_v1"
 
     parser = argparse.ArgumentParser(
@@ -313,7 +307,6 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         "retrieval_morphology": 0.0,
         "retrieval_fuzzy": 0.0,
         "retrieval_synonym": 0.0,
-        "retrieval_semantic": 0.0,
         "retrieval_rrf": 0.0,
         "channel_score_exact_structured": 0.0,
         "channel_score_attribute": 0.0,
@@ -321,14 +314,12 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         "channel_score_morphology": 0.0,
         "channel_score_fuzzy": 0.0,
         "channel_score_synonym_bm25": 0.0,
-        "channel_score_semantic": 0.0,
         "channel_rank_exact_structured": 0.0,
         "channel_rank_attribute": 0.0,
         "channel_rank_bm25": 0.0,
         "channel_rank_morphology": 0.0,
         "channel_rank_fuzzy": 0.0,
         "channel_rank_synonym_bm25": 0.0,
-        "channel_rank_semantic": 0.0,
         "exact_match_flag": 0.0,
         "phrase_match_flag": 0.0,
         "category_match_flag": 0.0,
@@ -338,9 +329,6 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         "appeared_in_multiple_channels": 0.0,
         "strict_term_coverage": 0.0,
         "fuzzy_edit_score": 0.0,
-        "semantic_backend_bge_m3": 0.0,
-        "semantic_backend_fallback": 0.0,
-        "semantic_via_faiss": 0.0,
     }
     for column, default in retrieval_numeric_defaults.items():
         if column not in x.columns:

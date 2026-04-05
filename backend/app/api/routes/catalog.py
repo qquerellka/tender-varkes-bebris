@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.get("/categories", response_model=list[CategoryRead])
-async def list_categories(
+def list_categories(
     session: Session = Depends(get_session_dependency),
 ) -> list[CategoryRead]:
     catalog_service = get_catalog_service(session)
@@ -25,7 +25,7 @@ async def list_categories(
 
 
 @router.get("/suppliers", response_model=list[SupplierRead])
-async def list_suppliers(
+def list_suppliers(
     session: Session = Depends(get_session_dependency),
 ) -> list[SupplierRead]:
     catalog_service = get_catalog_service(session)
@@ -33,7 +33,7 @@ async def list_suppliers(
 
 
 @router.get("/summary", response_model=CatalogSummaryRead)
-async def get_catalog_summary(
+def get_catalog_summary(
     session: Session = Depends(get_session_dependency),
     actor: CurrentActor = Depends(get_current_actor),
 ) -> CatalogSummaryRead:
@@ -42,7 +42,7 @@ async def get_catalog_summary(
 
 
 @router.get("/feed", response_model=CatalogFeedRead)
-async def get_catalog_feed(
+def get_catalog_feed(
     limit: int = 24,
     offset: int = 0,
     category_id: str | None = None,
@@ -62,7 +62,7 @@ async def get_catalog_feed(
 
 
 @router.get("/ste/{ste_id}", response_model=STEItemRead)
-async def get_ste(
+def get_ste(
     ste_id: str,
     session: Session = Depends(get_session_dependency),
 ) -> STEItemRead:
@@ -74,7 +74,7 @@ async def get_ste(
 
 
 @router.get("/ste/{ste_id}/related", response_model=list[RelatedSTEItemRead])
-async def get_related_ste(
+def get_related_ste(
     ste_id: str,
     limit: int = 6,
     session: Session = Depends(get_session_dependency),

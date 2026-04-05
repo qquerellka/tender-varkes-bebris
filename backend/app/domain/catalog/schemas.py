@@ -74,6 +74,8 @@ class STEItemRead(BaseModel):
     supplier_id: str
     supplier_name: str
     attributes: dict[str, str] = Field(default_factory=dict)
+    attributes_text: str = Field(default="", exclude=True)
+    attribute_value_count: int = Field(default=0, exclude=True)
     status: str
 
 

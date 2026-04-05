@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
@@ -42,40 +43,58 @@ def _warmup_search_stack() -> None:
     app.state.ranking_warmup = "running"
     app.state.search_warmup_error = None
     app.state.ranking_warmup_error = None
+    app.state.search_warmup_duration_seconds = None
+    app.state.ranking_warmup_duration_seconds = None
     app.state.search_documents_count = None
     app.state.semantic_backend = None
     app.state.semantic_faiss_enabled = None
     app.state.ranking_provider_name = None
     app.state.ranking_provider_mode = settings.ranking_provider
 
+    search_started_at = time.perf_counter()
     try:
         with SessionLocal() as session:
             search_repository = SearchRepository(session)
-            index = search_repository._get_hybrid_index()
-            app.state.search_documents_count = len(index.documents)
-            app.state.semantic_backend = index._semantic_backend
-            app.state.semantic_faiss_enabled = index._semantic_faiss_index is not None
+            backend_status = search_repository.warmup_search_backend()
+            elapsed_seconds = time.perf_counter() - search_started_at
+            app.state.search_documents_count = backend_status["documents_count"]
+            app.state.semantic_backend = backend_status["semantic_backend"]
+            app.state.semantic_faiss_enabled = backend_status["semantic_faiss_enabled"]
+            app.state.search_warmup_duration_seconds = round(elapsed_seconds, 3)
             logger.info(
-                "Search warmup complete: semantic_backend=%s faiss_enabled=%s documents=%s",
-                index._semantic_backend,
-                index._semantic_faiss_index is not None,
-                len(index.documents),
+                "Search warmup complete: semantic_backend=%s faiss_enabled=%s documents=%s duration_seconds=%.3f",
+                backend_status["semantic_backend"],
+                backend_status["semantic_faiss_enabled"],
+                backend_status["documents_count"],
+                elapsed_seconds,
             )
             app.state.search_warmup = "ready"
     except Exception as exc:
+        app.state.search_warmup_duration_seconds = round(
+            time.perf_counter() - search_started_at,
+            3,
+        )
         app.state.search_warmup = "failed"
         app.state.search_warmup_error = str(exc)
         logger.warning("Search warmup failed: %s", exc)
 
+    ranking_started_at = time.perf_counter()
     try:
         ranking_provider = get_ranking_provider()
+        elapsed_seconds = time.perf_counter() - ranking_started_at
         app.state.ranking_provider_name = ranking_provider.__class__.__name__
+        app.state.ranking_warmup_duration_seconds = round(elapsed_seconds, 3)
         logger.info(
-            "Ranking provider warmup complete: provider=%s",
+            "Ranking provider warmup complete: provider=%s duration_seconds=%.3f",
             ranking_provider.__class__.__name__,
+            elapsed_seconds,
         )
         app.state.ranking_warmup = "ready"
     except Exception as exc:
+        app.state.ranking_warmup_duration_seconds = round(
+            time.perf_counter() - ranking_started_at,
+            3,
+        )
         app.state.ranking_warmup = "failed"
         app.state.ranking_warmup_error = str(exc)
         logger.warning("Ranking provider warmup failed: %s", exc)
@@ -87,6 +106,8 @@ def schedule_warmup_search_stack() -> None:
     app.state.ranking_warmup = "pending"
     app.state.search_warmup_error = None
     app.state.ranking_warmup_error = None
+    app.state.search_warmup_duration_seconds = None
+    app.state.ranking_warmup_duration_seconds = None
     app.state.search_documents_count = None
     app.state.semantic_backend = None
     app.state.semantic_faiss_enabled = None

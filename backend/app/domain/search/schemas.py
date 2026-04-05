@@ -37,6 +37,8 @@ class CandidateItem(BaseModel):
     supplier_id: str = Field(default="", exclude=True)
     status: str = Field(default="", exclude=True)
     attributes: dict[str, str] = Field(default_factory=dict, exclude=True)
+    attributes_text: str = Field(default="", exclude=True)
+    attribute_value_count: int = Field(default=0, exclude=True)
     baseline_score: float = Field(default=0.0, exclude=True)
     retrieval_score: float = Field(default=0.0, exclude=True)
     retrieval_reasons: list[str] = Field(default_factory=list, exclude=True)
@@ -45,14 +47,23 @@ class CandidateItem(BaseModel):
     retrieval_features: dict[str, float] = Field(default_factory=dict, exclude=True)
 
 
+class SearchQueryVariantRead(BaseModel):
+    query: str
+    source: str
+    confidence: str
+    is_primary: bool = False
+
+
 class SearchMeta(BaseModel):
     session_id: str | None = None
     query: str
     normalized_query: str
     corrected_query: str | None = None
+    correction_confidence: str = "none"
     applied_synonyms: list[str] = Field(default_factory=list)
     synonym_sources: dict[str, str] = Field(default_factory=dict)
     synonym_confidence: dict[str, float] = Field(default_factory=dict)
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
     explanations: list[str] = Field(default_factory=list)
     ranking_mode: str
 
@@ -75,6 +86,8 @@ class SearchSuggestionsMeta(BaseModel):
     effective_query: str
     corrected_query: str | None = None
     correction_type: str = "none"
+    correction_confidence: str = "none"
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
 
 
 class SearchSuggestionsResponse(BaseModel):
@@ -135,10 +148,12 @@ class SearchDebugQueryRead(BaseModel):
     effective: str
     corrected: str | None = None
     correction_type: str = "none"
+    correction_confidence: str = "none"
     filters: SearchFilters = Field(default_factory=SearchFilters)
     applied_synonyms: list[str] = Field(default_factory=list)
     synonym_sources: dict[str, str] = Field(default_factory=dict)
     synonym_confidence: dict[str, float] = Field(default_factory=dict)
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
     search_terms: list[str] = Field(default_factory=list)
     morphology_terms: list[str] = Field(default_factory=list)
     synonym_terms: list[str] = Field(default_factory=list)
@@ -191,12 +206,17 @@ class SearchDebugResponse(BaseModel):
 class SpellcheckResponse(BaseModel):
     original_query: str
     corrected_query: str | None = None
+    correction_type: str = "none"
+    correction_confidence: str = "none"
+    query_variants: list[SearchQueryVariantRead] = Field(default_factory=list)
 
 
 class SearchStackStatusRead(BaseModel):
     ready: bool
     search_warmup: str
     ranking_warmup: str
+    search_warmup_duration_seconds: float | None = None
+    ranking_warmup_duration_seconds: float | None = None
     ranking_provider: str | None = None
     ranking_provider_mode: str | None = None
     search_documents_count: int | None = None

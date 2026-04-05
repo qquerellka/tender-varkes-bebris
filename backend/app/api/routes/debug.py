@@ -33,6 +33,16 @@ async def get_debug_search_stack(request: Request) -> SearchStackStatusRead:
         ready=search_warmup == "ready" and ranking_warmup == "ready",
         search_warmup=search_warmup,
         ranking_warmup=ranking_warmup,
+        search_warmup_duration_seconds=getattr(
+            request.app.state,
+            "search_warmup_duration_seconds",
+            None,
+        ),
+        ranking_warmup_duration_seconds=getattr(
+            request.app.state,
+            "ranking_warmup_duration_seconds",
+            None,
+        ),
         ranking_provider=getattr(request.app.state, "ranking_provider_name", None),
         ranking_provider_mode=getattr(request.app.state, "ranking_provider_mode", None),
         search_documents_count=getattr(request.app.state, "search_documents_count", None),

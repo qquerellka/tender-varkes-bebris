@@ -16,6 +16,7 @@ from app.main import app
 class ApiEndpointsTests(unittest.TestCase):
     def setUp(self) -> None:
         SearchRepository._search_vocabulary_cache = None
+        SearchRepository._search_spell_vocabulary_cache = None
         SearchRepository._hybrid_index_cache = None
         SearchRepository._hybrid_index_signature = None
 

@@ -38,7 +38,7 @@ def ensure_search_stack_ready(request: Request) -> None:
 
 
 @router.post("", response_model=SearchResponse)
-async def search(
+def search(
     payload: SearchRequest,
     _: None = Depends(ensure_search_stack_ready),
     session: Session = Depends(get_session_dependency),
@@ -49,7 +49,7 @@ async def search(
 
 
 @router.get("/suggestions", response_model=SearchSuggestionsResponse)
-async def suggestions(
+def suggestions(
     query: str = Query(""),
     _: None = Depends(ensure_search_stack_ready),
     session: Session = Depends(get_session_dependency),
@@ -60,7 +60,7 @@ async def suggestions(
 
 
 @router.get("/spellcheck", response_model=SpellcheckResponse)
-async def spellcheck(
+def spellcheck(
     query: str = Query(...),
     _: None = Depends(ensure_search_stack_ready),
     session: Session = Depends(get_session_dependency),
@@ -70,7 +70,7 @@ async def spellcheck(
 
 
 @router.get("/history", response_model=SearchHistoryResponse)
-async def history(
+def history(
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_session_dependency),
     actor: CurrentActor = Depends(get_current_actor),
@@ -80,7 +80,7 @@ async def history(
 
 
 @router.get("/activity", response_model=SearchActivityResponse)
-async def activity(
+def activity(
     limit: int = Query(20, ge=1, le=100),
     session: Session = Depends(get_session_dependency),
     actor: CurrentActor = Depends(get_current_actor),

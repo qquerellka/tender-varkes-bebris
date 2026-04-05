@@ -39,7 +39,6 @@ RETRIEVAL_REASON_FEATURES = [
     "retrieval_morphology",
     "retrieval_fuzzy",
     "retrieval_synonym",
-    "retrieval_semantic",
     "retrieval_rrf",
 ]
 
@@ -221,8 +220,60 @@ class LocalMlRankingProvider(RankingProvider):
         return float(sum(1 for token in set(query_tokens) if token in candidate_tokens))
 
     @staticmethod
-    def _safe_attributes_text(attributes: dict[str, str]) -> str:
-        return " ".join(str(value) for value in attributes.values() if str(value).strip())
+    def _resolve_attributes_text(candidate: CandidateItem) -> str:
+        if candidate.attributes_text.strip():
+            return candidate.attributes_text
+        return " ".join(
+            str(value).strip()
+            for value in candidate.attributes.values()
+            if str(value).strip()
+        )
+
+    @staticmethod
+    def _resolve_attribute_value_count(candidate: CandidateItem) -> float:
+        if candidate.attribute_value_count > 0:
+            return float(candidate.attribute_value_count)
+        return float(len(candidate.attributes))
+
+    @staticmethod
+    def _is_semantic_feature(feature_name: str) -> bool:
+        return feature_name in {
+            "retrieval_semantic",
+            "channel_score_semantic",
+            "channel_rank_semantic",
+            "semantic_backend_bge_m3",
+            "semantic_backend_fallback",
+            "semantic_via_faiss",
+        }
+
+    @classmethod
+    def _filtered_retrieval_features(
+        cls,
+        features: dict[str, float],
+    ) -> dict[str, float]:
+        return {
+            name: value
+            for name, value in features.items()
+            if not cls._is_semantic_feature(name)
+        }
+
+    @staticmethod
+    def _filtered_channel_values(
+        values: dict[str, float | int],
+    ) -> dict[str, float | int]:
+        return {
+            name: value
+            for name, value in values.items()
+            if name != "semantic"
+        }
+
+    @staticmethod
+    def _filtered_retrieval_reasons(reasons: list[str]) -> set[str]:
+        return {
+            reason
+            for reason in reasons
+            if reason != "retrieval_semantic"
+        }
 
     def _build_feature_payloads(
         self,
@@ -252,13 +303,19 @@ class LocalMlRankingProvider(RankingProvider):
             candidate_description = normalize_query(candidate.description)
             candidate_category = normalize_query(candidate.category)
             candidate_supplier = normalize_query(candidate.supplier)
-            candidate_attributes_text = self._safe_attributes_text(candidate.attributes)
+            candidate_attributes_text = self._resolve_attributes_text(candidate)
             candidate_attributes = normalize_query(candidate_attributes_text)
 
-            retrieval_reasons = set(candidate.retrieval_reasons)
-            retrieval_channel_scores = dict(candidate.retrieval_channel_scores)
-            retrieval_channel_ranks = dict(candidate.retrieval_channel_ranks)
-            retrieval_features = dict(candidate.retrieval_features)
+            retrieval_reasons = self._filtered_retrieval_reasons(candidate.retrieval_reasons)
+            retrieval_channel_scores = self._filtered_channel_values(
+                dict(candidate.retrieval_channel_scores)
+            )
+            retrieval_channel_ranks = self._filtered_channel_values(
+                dict(candidate.retrieval_channel_ranks)
+            )
+            retrieval_features = self._filtered_retrieval_features(
+                dict(candidate.retrieval_features)
+            )
             baseline_reasons = set(candidate.reasons)
 
             title_overlap = self._token_overlap_count(query_tokens, candidate_title)
@@ -309,7 +366,7 @@ class LocalMlRankingProvider(RankingProvider):
                 ),
                 "matches_purchase_history": float(candidate_category in top_categories),
                 "popular_in_organization": float(candidate.id in popular_ste_ids),
-                "attribute_value_count": float(len(candidate.attributes)),
+                "attribute_value_count": self._resolve_attribute_value_count(candidate),
                 "title_len_chars": float(len(candidate.title)),
                 "description_len_chars": float(len(candidate.description)),
                 "item_category_id": candidate.category_id,

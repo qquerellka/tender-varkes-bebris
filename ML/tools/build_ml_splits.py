@@ -4,17 +4,24 @@ import argparse
 import csv
 import json
 import re
+import sys
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+TOOLS_DIR = Path(__file__).resolve().parent
+for candidate in (ROOT_DIR, TOOLS_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
 try:
     from retrieval_feature_enrichment import RetrievalFeatureBuilder, SessionRetrievalFeatures
-except ModuleNotFoundError as exc:  # pragma: no cover - allows python -m ML.tools.build_ml_splits
-    if exc.name != "retrieval_feature_enrichment":
-        raise
+except ImportError:
     from .retrieval_feature_enrichment import (  # type: ignore[no-redef]
         RetrievalFeatureBuilder,
         SessionRetrievalFeatures,
@@ -44,11 +51,11 @@ class SplitConfig:
 
 def parse_args() -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
-    default_source = script_dir.parent / "data" / "synthetic"
+    default_source = script_dir.parent / "data" / "orig" / "derived"
     default_output = default_source / "splits"
 
     parser = argparse.ArgumentParser(
-        description="Build time-based train/val/test ranking datasets from synthetic CSV."
+        description="Build time-based train/val/test ranking datasets from orig-derived CSV."
     )
     parser.add_argument("--source-dir", type=Path, default=default_source)
     parser.add_argument("--output-dir", type=Path, default=default_output)
@@ -79,6 +86,19 @@ def load_csv(path: Path) -> list[dict[str, str]]:
 
 def load_index(path: Path, key: str) -> dict[str, dict[str, str]]:
     return {row[key]: row for row in load_csv(path)}
+
+
+def log_step(message: str) -> None:
+    print(f"[build_ml_splits] {message}", flush=True)
+
+
+def format_seconds(value: float) -> str:
+    total_seconds = max(int(value), 0)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def build_session_split_map(
@@ -168,7 +188,6 @@ def enrich_row(
         "retrieval_morphology": float(retrieval_row.get("retrieval_morphology", 0.0)),
         "retrieval_fuzzy": float(retrieval_row.get("retrieval_fuzzy", 0.0)),
         "retrieval_synonym": float(retrieval_row.get("retrieval_synonym", 0.0)),
-        "retrieval_semantic": float(retrieval_row.get("retrieval_semantic", 0.0)),
         "retrieval_rrf": float(retrieval_row.get("retrieval_rrf", 0.0)),
         "channel_score_exact_structured": float(
             retrieval_row.get("channel_score_exact_structured", 0.0)
@@ -180,7 +199,6 @@ def enrich_row(
         "channel_score_synonym_bm25": float(
             retrieval_row.get("channel_score_synonym_bm25", 0.0)
         ),
-        "channel_score_semantic": float(retrieval_row.get("channel_score_semantic", 0.0)),
         "channel_rank_exact_structured": float(
             retrieval_row.get("channel_rank_exact_structured", 0.0)
         ),
@@ -191,7 +209,6 @@ def enrich_row(
         "channel_rank_synonym_bm25": float(
             retrieval_row.get("channel_rank_synonym_bm25", 0.0)
         ),
-        "channel_rank_semantic": float(retrieval_row.get("channel_rank_semantic", 0.0)),
         "exact_match_flag": float(retrieval_row.get("exact_match_flag", 0.0)),
         "phrase_match_flag": float(retrieval_row.get("phrase_match_flag", 0.0)),
         "category_match_flag": float(retrieval_row.get("category_match_flag", 0.0)),
@@ -205,13 +222,6 @@ def enrich_row(
         ),
         "strict_term_coverage": float(retrieval_row.get("strict_term_coverage", 0.0)),
         "fuzzy_edit_score": float(retrieval_row.get("fuzzy_edit_score", 0.0)),
-        "semantic_backend_bge_m3": float(
-            retrieval_row.get("semantic_backend_bge_m3", 0.0)
-        ),
-        "semantic_backend_fallback": float(
-            retrieval_row.get("semantic_backend_fallback", 0.0)
-        ),
-        "semantic_via_faiss": float(retrieval_row.get("semantic_via_faiss", 0.0)),
     }
 
 
@@ -230,6 +240,7 @@ def main() -> None:
     args = parse_args()
     source_dir = args.source_dir.resolve()
     output_dir = args.output_dir.resolve()
+    started_at = time.perf_counter()
 
     config = SplitConfig(
         train_ratio=args.train_ratio,
@@ -238,6 +249,7 @@ def main() -> None:
     )
     config.validate()
 
+    log_step(f"Loading source CSV files from {source_dir}")
     relevance_rows = load_csv(source_dir / "query_relevance.csv")
     item_by_id = load_index(source_dir / "ste_items.csv", key="id")
     category_by_id = load_index(source_dir / "categories.csv", key="id")
@@ -246,25 +258,46 @@ def main() -> None:
     org_profile_by_org_id = load_index(source_dir / "org_search_profiles.csv", key="organization_id")
     synonym_rows = load_csv(source_dir / "synonyms.csv")
     spell_rows = load_csv(source_dir / "spell_corrections.csv")
+    log_step(
+        "Loaded "
+        f"{len(relevance_rows)} relevance rows, "
+        f"{len(item_by_id)} items, "
+        f"{len(category_by_id)} categories, "
+        f"{len(supplier_by_id)} suppliers"
+    )
+
+    log_step("Building retrieval feature index")
     retrieval_builder = RetrievalFeatureBuilder(
         item_by_id=item_by_id,
         category_by_id=category_by_id,
         supplier_by_id=supplier_by_id,
         synonym_rows=synonym_rows,
         spell_rows=spell_rows,
+        progress=True,
     )
+    log_step(f"Search index ready with {len(retrieval_builder.documents)} documents")
+
     session_queries: dict[str, tuple[str, str]] = {}
+    session_candidate_ids: dict[str, set[str]] = {}
     for row in relevance_rows:
         session_queries.setdefault(
             row["session_id"],
             (row.get("query", ""), row.get("normalized_query", "")),
         )
-    session_retrieval_features = retrieval_builder.build_session_feature_map(session_queries)
+        session_candidate_ids.setdefault(row["session_id"], set()).add(row["ste_id"])
+    log_step(f"Computing retrieval features for {len(session_queries)} sessions")
+    session_retrieval_features = retrieval_builder.build_session_feature_map(
+        session_queries,
+        candidate_item_ids_by_session=session_candidate_ids,
+        progress_every=max(100, len(session_queries) // 20),
+    )
 
+    log_step("Assigning sessions to train/val/test")
     session_split = build_session_split_map(relevance_rows, config=config)
 
     split_rows: dict[str, list[dict[str, Any]]] = {"train": [], "val": [], "test": []}
-    for row in relevance_rows:
+    total_rows = len(relevance_rows)
+    for index, row in enumerate(relevance_rows, start=1):
         split_name = session_split[row["session_id"]]
         split_rows[split_name].append(
             enrich_row(
@@ -277,11 +310,20 @@ def main() -> None:
                 retrieval_features=session_retrieval_features.get(row["session_id"]),
             )
         )
+        if index == 1 or index % 10000 == 0 or index == total_rows:
+            elapsed = time.perf_counter() - started_at
+            log_step(
+                "Enriched rows "
+                f"{index}/{total_rows} "
+                f"({(index / max(total_rows, 1)) * 100:.1f}%) "
+                f"elapsed={format_seconds(elapsed)}"
+            )
 
     train_path = output_dir / "train_ranker.csv"
     val_path = output_dir / "val_ranker.csv"
     test_path = output_dir / "test_ranker.csv"
 
+    log_step("Writing split CSV files")
     write_csv(train_path, split_rows["train"])
     write_csv(val_path, split_rows["val"])
     write_csv(test_path, split_rows["test"])
@@ -302,6 +344,7 @@ def main() -> None:
         "retrieval_enrichment": {
             "semantic_backend": retrieval_builder.index._semantic_backend,
             "faiss_enabled": retrieval_builder.index._semantic_faiss_index is not None,
+            "semantic_enabled": getattr(retrieval_builder.index, "_semantic_enabled", False),
             "documents": len(retrieval_builder.documents),
         },
         "config": {
@@ -314,12 +357,14 @@ def main() -> None:
     stats_path = output_dir / "split_stats.json"
     stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    total_elapsed = time.perf_counter() - started_at
     print("ML splits created.")
     print(f"- train: {train_path}")
     print(f"- val:   {val_path}")
     print(f"- test:  {test_path}")
     print(f"- stats: {stats_path}")
     print(f"Rows: train={split_counts['train']}, val={split_counts['val']}, test={split_counts['test']}")
+    print(f"Elapsed: {format_seconds(total_elapsed)}")
 
 
 if __name__ == "__main__":

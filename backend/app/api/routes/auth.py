@@ -10,7 +10,7 @@ router = APIRouter()
 
 
 @router.get("/demo-users", response_model=list[DemoUserRead])
-async def list_demo_users(
+def list_demo_users(
     session: Session = Depends(get_session_dependency),
 ) -> list[DemoUserRead]:
     auth_service = get_auth_service(session)
@@ -18,7 +18,7 @@ async def list_demo_users(
 
 
 @router.post("/login-demo", response_model=AuthSessionRead)
-async def login_demo(
+def login_demo(
     payload: DemoLoginRequest,
     session: Session = Depends(get_session_dependency),
 ) -> AuthSessionRead:
@@ -27,7 +27,7 @@ async def login_demo(
 
 
 @router.get("/me", response_model=AuthSessionRead)
-async def get_me(
+def get_me(
     session: Session = Depends(get_session_dependency),
     actor: CurrentActor = Depends(get_current_actor),
 ) -> AuthSessionRead:

@@ -1,12 +1,14 @@
 import unittest
 
 from app.domain.search.normalizer import (
+    build_spell_vocabulary_index,
     correct_keyboard_layout,
     correct_query_fuzzy,
     expand_fuzzy_term_variants,
     expand_term_variants,
     extract_query_terms,
     normalize_query,
+    resolve_query_fuzzy_correction,
 )
 
 
@@ -32,6 +34,33 @@ class SearchNormalizerTests(unittest.TestCase):
 
         self.assertEqual(correct_query_fuzzy("принтэр", vocabulary), "принтер")
         self.assertEqual(correct_query_fuzzy("афтобус", vocabulary), "автобус")
+
+    def test_fuzzy_spellcheck_returns_confidence_for_clear_winner(self) -> None:
+        vocabulary = build_spell_vocabulary_index(
+            {"принтер", "принтеры", "картридж"},
+            token_frequencies={"принтер": 12, "принтеры": 4},
+        )
+
+        correction = resolve_query_fuzzy_correction("принтэр", vocabulary)
+
+        self.assertIsNotNone(correction)
+        assert correction is not None
+        self.assertEqual(correction.corrected_query, "принтер")
+        self.assertEqual(correction.confidence, "high")
+
+    def test_fuzzy_spellcheck_does_not_touch_protected_brand_model_tokens(self) -> None:
+        vocabulary = build_spell_vocabulary_index(
+            {"принтер", "картридж", "usb", "ssd"},
+            protected_tokens={"hp", "12a", "usb", "ssd", "a4"},
+        )
+
+        self.assertIsNone(
+            correct_query_fuzzy(
+                "hp 12a usb ssd a4",
+                vocabulary,
+                protected_tokens={"hp", "12a", "usb", "ssd", "a4"},
+            )
+        )
 
     def test_expand_term_variants_adds_domain_aliases_and_morphology(self) -> None:
         variants = expand_term_variants(
