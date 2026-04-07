@@ -1,0 +1,9 @@
+id,search_session_id,user_id,organization_id,ste_id,supplier_id,category_id,rank_position,results_page,visible,rendered_at
+imp_001,search_session_1001,demo_customer_transport,org_transport,ste_101,supplier_roma,cat_transport,1,1,true,2026-04-04T10:00:00Z
+imp_002,search_session_1001,demo_customer_transport,org_transport,ste_108,supplier_vector,cat_transport,2,1,true,2026-04-04T10:00:00Z
+imp_003,search_session_1001,demo_customer_transport,org_transport,ste_111,supplier_city,cat_transport,3,1,true,2026-04-04T10:00:00Z
+imp_004,search_session_1001,demo_customer_transport,org_transport,ste_114,supplier_north,cat_transport,4,1,true,2026-04-04T10:00:00Z
+imp_005,search_session_1001,demo_customer_transport,org_transport,ste_119,supplier_roma,cat_transport,5,1,true,2026-04-04T10:00:00Z
+imp_006,search_session_1002,demo_customer_transport,org_transport,ste_101,supplier_roma,cat_transport,1,1,true,2026-04-04T10:01:31Z
+imp_007,search_session_1002,demo_customer_transport,org_transport,ste_115,supplier_city,cat_transport,2,1,true,2026-04-04T10:01:31Z
+imp_008,search_session_1002,demo_customer_transport,org_transport,ste_118,supplier_vector,cat_transport,3,1,true,2026-04-04T10:01:31Z

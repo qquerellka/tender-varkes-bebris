@@ -1,0 +1,9 @@
+{
+  "loss_function": "YetiRankPairwise",
+  "eval_metric": "NDCG:top=10",
+  "iterations": 350,
+  "learning_rate": 0.05,
+  "depth": 6,
+  "random_seed": 42,
+  "verbose": 50
+}

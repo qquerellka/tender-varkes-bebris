@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tender_search}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tender_search"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        INSTALL_SEMANTIC: ${BACKEND_INSTALL_SEMANTIC:-false}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_NAME: ${APP_NAME:-Tender Search Backend}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      API_PREFIX: ${API_PREFIX:-/api/v1}
+      RANKING_MODE: ${RANKING_MODE:-retrieval_only}
+      RANKING_PROVIDER: ${RANKING_PROVIDER:-noop}
+      SEARCH_RETRIEVAL_BACKEND: ${SEARCH_RETRIEVAL_BACKEND:-postgres}
+      ML_ARTIFACTS_DIR: ${ML_ARTIFACTS_DIR:-/app/ML/models/catboost_ranker_v1}
+      BOOTSTRAP_DATASET: ${BOOTSTRAP_DATASET:-portal_csv}
+      PORTAL_STE_CSV_PATH: ${PORTAL_STE_CSV_PATH:-/app/ML/data/orig/СТЕ_20260403/СТЕ_20260403.csv}
+      PORTAL_CONTRACTS_CSV_PATH: ${PORTAL_CONTRACTS_CSV_PATH:-/app/ML/data/orig/Контракты_20260403/Контракты_20260403.csv}
+      PORTAL_IMPORT_TRUNCATE: ${PORTAL_IMPORT_TRUNCATE:-false}
+      PORTAL_IMPORT_STE_LIMIT: ${PORTAL_IMPORT_STE_LIMIT:-10000}
+      PORTAL_IMPORT_CONTRACT_LIMIT: ${PORTAL_IMPORT_CONTRACT_LIMIT:-10000}
+      PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT: ${PORTAL_IMPORT_PURCHASE_HISTORY_LIMIT:-120}
+      SEARCH_SEMANTIC_BACKEND: ${SEARCH_SEMANTIC_BACKEND:-disabled}
+      SEARCH_SEMANTIC_USE_FAISS: ${SEARCH_SEMANTIC_USE_FAISS:-false}
+      SEARCH_LEMMATIZER_CACHE_SIZE: ${SEARCH_LEMMATIZER_CACHE_SIZE:-50000}
+      SEARCH_FALLBACK_VARIANT_CACHE_SIZE: ${SEARCH_FALLBACK_VARIANT_CACHE_SIZE:-50000}
+      SEARCH_INDEX_CACHE_PATH: ${SEARCH_INDEX_CACHE_PATH:-/app/.cache/search/hybrid_search_index.pkl}
+      SEARCH_SEMANTIC_ALLOW_REMOTE_DOWNLOAD: ${SEARCH_SEMANTIC_ALLOW_REMOTE_DOWNLOAD:-false}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-tender_search}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-20}
+      DATABASE_MAX_OVERFLOW: ${DATABASE_MAX_OVERFLOW:-20}
+      DATABASE_POOL_TIMEOUT: ${DATABASE_POOL_TIMEOUT:-60}
+      DATABASE_POOL_RECYCLE: ${DATABASE_POOL_RECYCLE:-1800}
+      DEMO_USER_ID: ${DEMO_USER_ID:-user_1}
+      DEMO_ORGANIZATION_ID: ${DEMO_ORGANIZATION_ID:-org_1}
+      HF_HOME: /app/.cache/huggingface
+    volumes:
+      - ./ML:/app/ML:ro
+      - huggingface_cache:/app/.cache/huggingface
+      - search_index_cache:/app/.cache/search
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-1800s}
+    command: >
+      sh -c "alembic upgrade head &&
+      python -m app.bootstrap &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
+volumes:
+  postgres_data:
+  huggingface_cache:
+  search_index_cache:

@@ -1,0 +1,10 @@
+[
+  "query_len",
+  "normalized_query_len",
+  "position_num",
+  "cat_match_user",
+  "cat_match_org",
+  "supplier_match_user",
+  "is_recent_ste",
+  "query_in_history"
+]

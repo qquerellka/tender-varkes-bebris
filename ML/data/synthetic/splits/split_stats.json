@@ -1,0 +1,45 @@
+{
+  "source_dir": "C:\\Users\\golov\\OneDrive\\Документы\\tender\\frontend-template\\my-app\\ML\\data\\synthetic",
+  "output_dir": "C:\\Users\\golov\\OneDrive\\Документы\\tender\\frontend-template\\my-app\\ML\\data\\synthetic\\splits",
+  "rows_total": 46245,
+  "rows_per_split": {
+    "train": 36990,
+    "val": 4620,
+    "test": 4635
+  },
+  "sessions_per_split": {
+    "train": 2466,
+    "val": 308,
+    "test": 309
+  },
+  "label_distribution_per_split": {
+    "train": {
+      "0": 16393,
+      "1": 18799,
+      "3": 487,
+      "2": 1311
+    },
+    "val": {
+      "1": 2348,
+      "0": 2060,
+      "2": 159,
+      "3": 53
+    },
+    "test": {
+      "1": 2350,
+      "0": 2058,
+      "2": 161,
+      "3": 66
+    }
+  },
+  "retrieval_enrichment": {
+    "semantic_backend": "bge_m3",
+    "faiss_enabled": true,
+    "documents": 1200
+  },
+  "config": {
+    "train_ratio": 0.8,
+    "val_ratio": 0.1,
+    "test_ratio": 0.1
+  }
+}
